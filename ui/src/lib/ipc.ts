@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { derivePublishBlockers } from "./publish-safety";
 import {
   type AgentRunRecordView,
   type AiConnectionStatusView,
@@ -18,6 +19,28 @@ import {
   sampleRepositories,
   sampleStatus,
 } from "./view-models";
+import type {
+  AnalysisRunMode,
+  AnalysisRunView,
+  InlineCommentDraftView,
+  InlineMappingStatus,
+  ReviewDraftView,
+  ReviewEvent,
+  ReviewPublishPayloadView,
+} from "./workspace-view-models";
+
+export type {
+  AnalysisRunMode,
+  AnalysisRunStatus,
+  AnalysisRunView,
+  InlineMappingStatus,
+  ReviewDraftView,
+  ReviewEvent,
+  ReviewPublishPayloadView,
+} from "./workspace-view-models";
+
+export type InlineCommentDraft = InlineCommentDraftView;
+export type ReviewPublishPayload = ReviewPublishPayloadView;
 
 declare global {
   interface Window {
@@ -111,44 +134,10 @@ export interface ConfirmSubmitReviewInput {
   confirmation_id: string;
 }
 
-export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
-export type InlineMappingStatus = "valid" | "missing_path" | "invalid_side" | "invalid_line" | "stale_diff";
-
-export interface InlineCommentDraft {
-  id: string;
-  path: string;
-  side: string;
-  line: number;
-  start_line: number | null;
-  start_side: string | null;
-  body: string;
-  severity: string | null;
-  confidence: number | null;
-  source_run_id: string | null;
-  source_finding_id: string | null;
-  selected_for_publish: boolean;
-  dismissed: boolean;
-  user_edited: boolean;
-  mapping_status: InlineMappingStatus;
-}
-
-export interface ReviewPublishPayload {
-  owner: string;
-  repo: string;
-  number: number;
-  expected_head_sha: string;
-  expected_diff_hash: string;
-  body: string;
-  event: ReviewEvent;
-  inline_comments: InlineCommentDraft[];
-  explicit_verdict_confirmed: boolean;
-  private_diff_consent_required: boolean;
-  private_diff_consent_accepted: boolean;
-}
-
 export interface SubmittedReviewView {
   id: number;
   url: string;
+  payload?: ReviewPublishPayload;
 }
 
 export function buildReviewPublishPayload(input: ReviewPublishPayload): ReviewPublishPayload {
@@ -172,37 +161,16 @@ export function buildConfirmSubmitReviewRequest(input: ConfirmSubmitReviewInput)
   };
 }
 
-function publishableInlineComments(payload: ReviewPublishPayload): InlineCommentDraft[] {
-  return payload.inline_comments.filter(
-    (comment) => comment.selected_for_publish && !comment.dismissed && comment.mapping_status === "valid" && Boolean(comment.body.trim()),
-  );
-}
-
 export function prepareSubmitReview(input: SubmitPreflightInput): Promise<SubmitPreflightView> {
-  const blockedReasons: string[] = [];
-  if (!input.github_connected) blockedReasons.push("github_auth_required");
-  if (!input.write_scope_valid) blockedReasons.push("github_scope_insufficient");
-  if (input.sso_required) blockedReasons.push("github_sso_required");
-  if (!input.pr_open) blockedReasons.push("pr_closed");
-  if (input.pr_merged) blockedReasons.push("pr_merged");
-  if (input.payload.expected_head_sha !== input.current_head_sha) blockedReasons.push("head_changed");
-  if (input.payload.expected_diff_hash !== input.current_diff_hash) blockedReasons.push("diff_changed");
-  if (
-    input.payload.inline_comments.some(
-      (comment) => comment.selected_for_publish && !comment.dismissed && Boolean(comment.body.trim()) && comment.mapping_status !== "valid",
-    )
-  ) {
-    blockedReasons.push("inline_mapping_invalid");
-  }
-  if (!input.payload.body.trim() && publishableInlineComments(input.payload).length === 0) {
-    blockedReasons.push("payload_empty");
-  }
-  if (input.payload.event !== "COMMENT" && !input.payload.explicit_verdict_confirmed) {
-    blockedReasons.push("explicit_verdict_confirmation_required");
-  }
-  if (input.payload.private_diff_consent_required && !input.payload.private_diff_consent_accepted) {
-    blockedReasons.push("private_diff_consent_required");
-  }
+  const blockedReasons = derivePublishBlockers(input.payload, {
+    github_connected: input.github_connected,
+    write_scope_valid: input.write_scope_valid,
+    sso_required: input.sso_required,
+    pr_open: input.pr_open,
+    pr_merged: input.pr_merged,
+    current_head_sha: input.current_head_sha,
+    current_diff_hash: input.current_diff_hash,
+  });
 
   return safeInvoke("prepare_submit_review", { request: buildPrepareSubmitReviewRequest(input) }, {
     status: blockedReasons.length === 0 ? "ready" : "blocked",
@@ -285,6 +253,59 @@ export interface AgentRunStateView {
   disabled_reason?: string | null;
 }
 
+export interface PullRequestWorkspaceInput {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+export interface AnalysisRunReferenceInput extends PullRequestWorkspaceInput {
+  run_id: string;
+}
+
+export interface StartAnalysisRunInput extends PullRequestWorkspaceInput {
+  files: ChangedFile[];
+  mode: AnalysisRunMode;
+  model: string;
+  reasoning_effort: ReasoningEffort;
+  review_language: Locale;
+  head_sha: string | null;
+  diff_hash?: string | null;
+  context_hash?: string | null;
+  custom_prompt?: string | null;
+  selected_files?: string[];
+  excluded_files?: string[];
+  private_diff_consent_required: boolean;
+  private_diff_consent_accepted: boolean;
+}
+
+export interface CreateDraftFromRunInput extends PullRequestWorkspaceInput {
+  source_run_ids: string[];
+  base_head_sha: string;
+  base_diff_hash: string;
+  body: string;
+  event: ReviewEvent;
+}
+
+export interface SaveReviewDraftInput {
+  draft: ReviewDraftView;
+  mark_active: boolean;
+}
+
+export interface ReadReviewDraftInput extends PullRequestWorkspaceInput {
+  draft_id: string;
+}
+
+export interface MarkActiveDraftInput extends PullRequestWorkspaceInput {
+  draft_id: string;
+}
+
+export interface ValidateInlineCommentsInput {
+  comments: InlineCommentDraft[];
+  files: ChangedFile[];
+  diff_hash: string;
+}
+
 export function startGithubOAuth(mode: "browser" | "device" = "browser"): Promise<OAuthStartView> {
   return safeInvokeNoFallback("start_github_oauth", { request: { client_id: null, mode } });
 }
@@ -353,6 +374,50 @@ export function readAgentRun(run_id: string): Promise<AgentRunStateView> {
 
 export function cancelAgentRun(run_id: string): Promise<AgentRunStateView> {
   return safeInvokeNoFallback("cancel_agent_run", { request: { run_id } });
+}
+
+export function listAnalysisRuns(input: PullRequestWorkspaceInput): Promise<AnalysisRunView[]> {
+  return safeInvokeNoFallback("list_analysis_runs", { request: input });
+}
+
+export function startAnalysisRun(input: StartAnalysisRunInput): Promise<AnalysisRunView> {
+  return safeInvokeNoFallback("start_analysis_run", { request: input });
+}
+
+export function readAnalysisRun(input: AnalysisRunReferenceInput): Promise<AnalysisRunView> {
+  return safeInvokeNoFallback("read_analysis_run", { request: input });
+}
+
+export function cancelAnalysisRun(input: AnalysisRunReferenceInput): Promise<AnalysisRunView> {
+  return safeInvokeNoFallback("cancel_analysis_run", { request: input });
+}
+
+export function archiveAnalysisRun(input: AnalysisRunReferenceInput): Promise<AnalysisRunView> {
+  return safeInvokeNoFallback("archive_analysis_run", { request: input });
+}
+
+export function createDraftFromRun(input: CreateDraftFromRunInput): Promise<ReviewDraftView> {
+  return safeInvokeNoFallback("create_draft_from_run", { request: input });
+}
+
+export function saveReviewDraft(input: SaveReviewDraftInput): Promise<ReviewDraftView> {
+  return safeInvokeNoFallback("save_review_draft", { request: input });
+}
+
+export function readReviewDraft(input: ReadReviewDraftInput): Promise<ReviewDraftView> {
+  return safeInvokeNoFallback("read_review_draft", { request: input });
+}
+
+export function listReviewDrafts(input: PullRequestWorkspaceInput): Promise<ReviewDraftView[]> {
+  return safeInvokeNoFallback("list_review_drafts", { request: input });
+}
+
+export function markActiveDraft(input: MarkActiveDraftInput): Promise<string | null> {
+  return safeInvokeNoFallback("mark_active_draft", { request: input });
+}
+
+export function validateInlineComments(input: ValidateInlineCommentsInput): Promise<InlineCommentDraft[]> {
+  return safeInvokeNoFallback("validate_inline_comments", { request: input });
 }
 
 export function openExternalUrl(url: string): Promise<void> {

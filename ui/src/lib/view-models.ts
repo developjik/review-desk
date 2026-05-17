@@ -9,6 +9,21 @@ export type AuthConnectionState =
   | "model_unavailable"
   | "rate_limited";
 
+export type {
+  AnalysisRunMode,
+  AnalysisRunStatus,
+  AnalysisRunView,
+  InlineCommentDraftView,
+  InlineMappingStatus,
+  PublishAttemptView,
+  ReviewDraftView,
+  ReviewEvent,
+  ReviewPublishPayloadView,
+  RunCentricQueueItem,
+  RunCentricQueueSection,
+  RunCentricQueueSectionId,
+} from "./workspace-view-models";
+
 export type Locale = "en" | "ko";
 
 export type AiConnectionStatus =
