@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-github-oauth"
+description = "Enables the start_github_oauth command without any pre-configured scope."
+commands.allow = ["start_github_oauth"]
+
+[[permission]]
+identifier = "deny-start-github-oauth"
+description = "Denies the start_github_oauth command without any pre-configured scope."
+commands.deny = ["start_github_oauth"]

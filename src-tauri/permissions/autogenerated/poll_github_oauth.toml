@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-poll-github-oauth"
+description = "Enables the poll_github_oauth command without any pre-configured scope."
+commands.allow = ["poll_github_oauth"]
+
+[[permission]]
+identifier = "deny-poll-github-oauth"
+description = "Denies the poll_github_oauth command without any pre-configured scope."
+commands.deny = ["poll_github_oauth"]

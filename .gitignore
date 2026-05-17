@@ -1,0 +1,6 @@
+/target/
+.reviewdesk/
+node_modules/
+dist/
+src-tauri/target/
+.superpowers/

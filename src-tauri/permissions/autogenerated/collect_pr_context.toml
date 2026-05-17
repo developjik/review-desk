@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-collect-pr-context"
+description = "Enables the collect_pr_context command without any pre-configured scope."
+commands.allow = ["collect_pr_context"]
+
+[[permission]]
+identifier = "deny-collect-pr-context"
+description = "Denies the collect_pr_context command without any pre-configured scope."
+commands.deny = ["collect_pr_context"]

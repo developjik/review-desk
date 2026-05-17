@@ -1,0 +1,38 @@
+fn main() {
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+            "get_app_status",
+            "get_ai_connection_status",
+            "get_codex_bridge_status",
+            "start_github_oauth",
+            "poll_github_oauth",
+            "cancel_github_oauth",
+            "logout_github",
+            "refresh_github_auth_status",
+            "start_codex_chatgpt_login",
+            "poll_codex_chatgpt_login",
+            "cancel_codex_chatgpt_login",
+            "read_codex_account",
+            "list_ai_models",
+            "select_ai_model",
+            "read_codex_rate_limits",
+            "logout_codex_chatgpt",
+            "refresh_ai_account_status",
+            "start_chatgpt_oauth",
+            "poll_chatgpt_oauth",
+            "list_repositories",
+            "load_review_queue",
+            "collect_pr_context",
+            "set_private_diff_consent",
+            "start_agent_run",
+            "read_agent_run",
+            "cancel_agent_run",
+            "generate_review_draft",
+            "save_draft",
+            "prepare_submit_review",
+            "confirm_submit_review",
+            "open_external_url",
+        ])),
+    )
+    .expect("failed to build Tauri app manifest");
+}

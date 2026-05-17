@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-poll-codex-chatgpt-login"
+description = "Enables the poll_codex_chatgpt_login command without any pre-configured scope."
+commands.allow = ["poll_codex_chatgpt_login"]
+
+[[permission]]
+identifier = "deny-poll-codex-chatgpt-login"
+description = "Denies the poll_codex_chatgpt_login command without any pre-configured scope."
+commands.deny = ["poll_codex_chatgpt_login"]

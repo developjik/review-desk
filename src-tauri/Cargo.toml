@@ -1,0 +1,23 @@
+[package]
+name = "reviewdesk-tauri"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+description = "ReviewDesk Tauri shell"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+reviewdesk = { path = ".." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "process"] }
+url = "2"
+webbrowser = "1"
+getrandom = "0.3"

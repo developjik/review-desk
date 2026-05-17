@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-submit-review"
+description = "Enables the prepare_submit_review command without any pre-configured scope."
+commands.allow = ["prepare_submit_review"]
+
+[[permission]]
+identifier = "deny-prepare-submit-review"
+description = "Denies the prepare_submit_review command without any pre-configured scope."
+commands.deny = ["prepare_submit_review"]

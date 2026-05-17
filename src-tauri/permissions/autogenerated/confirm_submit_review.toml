@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-confirm-submit-review"
+description = "Enables the confirm_submit_review command without any pre-configured scope."
+commands.allow = ["confirm_submit_review"]
+
+[[permission]]
+identifier = "deny-confirm-submit-review"
+description = "Denies the confirm_submit_review command without any pre-configured scope."
+commands.deny = ["confirm_submit_review"]

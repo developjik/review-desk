@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-load-review-queue"
+description = "Enables the load_review_queue command without any pre-configured scope."
+commands.allow = ["load_review_queue"]
+
+[[permission]]
+identifier = "deny-load-review-queue"
+description = "Denies the load_review_queue command without any pre-configured scope."
+commands.deny = ["load_review_queue"]
