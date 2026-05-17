@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "desktop": "tauri dev",
-    "desktop:build": "tauri build --bundles app",
+    "desktop:build": "tauri build --bundles app,dmg",
+    "desktop:release": "tauri build --bundles app,dmg",
+    "desktop:release:unsigned": "tauri build --bundles app,dmg --no-sign",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "lint": "tsc --noEmit"
