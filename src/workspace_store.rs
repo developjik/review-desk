@@ -82,10 +82,15 @@ impl WorkspaceStore {
                     .file_name()
                     .and_then(|value| value.to_str())
                     .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
+                let run_id = path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
+                validate_segment("run_id", run_id)?;
                 let run: AnalysisRun =
                     self.local
                         .load_json(&format!("{}/runs/{}", key.base_relative(), file_name))?;
-                validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
+                validate_run_identity(key, run_id, &run)?;
                 Ok(run)
             })
             .collect::<Result<Vec<_>>>()?;

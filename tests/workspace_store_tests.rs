@@ -96,6 +96,29 @@ fn workspace_store_updates_run_status_without_changing_run_identity() {
 }
 
 #[test]
+fn workspace_store_rejects_listed_run_when_file_stem_does_not_match_run_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let run = sample_run("run-a");
+    store.save_run(&key, &run).expect("save run");
+
+    let mut tampered = run.clone();
+    tampered.created_at = "2026-05-17T00:00:01Z".to_string();
+    std::fs::write(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/runs/run-b.json"),
+        serde_json::to_vec_pretty(&tampered).expect("serialize tampered run"),
+    )
+    .expect("tamper run");
+
+    assert!(
+        store.list_runs(&key).is_err(),
+        "listed run whose file stem differs from run_id should be rejected"
+    );
+}
+
+#[test]
 fn workspace_store_rejects_path_traversal_in_owner_repo_and_ids() {
     assert!(PrWorkspaceKey::new("../company", "payment-web", 582).is_err());
     assert!(PrWorkspaceKey::new("company", "../payment-web", 582).is_err());

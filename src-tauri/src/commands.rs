@@ -1319,8 +1319,14 @@ pub fn start_analysis_run(request: StartAnalysisRunRequest) -> CommandResult<Ana
         .diff_hash
         .unwrap_or_else(|| stable_changed_files_hash(&request.files));
     let now = chrono::Utc::now().to_rfc3339();
+    let private_diff_blocked =
+        request.private_diff_consent_required && !request.private_diff_consent_accepted;
     let run = AnalysisRun {
-        run_id: reviewdesk::review::new_analysis_run_id(&request.owner, &request.repo, request.number),
+        run_id: reviewdesk::review::new_analysis_run_id(
+            &request.owner,
+            &request.repo,
+            request.number,
+        ),
         owner: request.owner,
         repo: request.repo,
         number: request.number,
@@ -1336,18 +1342,24 @@ pub fn start_analysis_run(request: StartAnalysisRunRequest) -> CommandResult<Ana
         selected_files,
         excluded_files: request.excluded_files.unwrap_or_default(),
         private_diff_consent_snapshot: request.private_diff_consent_accepted,
-        status: AnalysisRunStatus::Queued,
-        blocked_reason: if request.private_diff_consent_required
-            && !request.private_diff_consent_accepted
-        {
+        status: if private_diff_blocked {
+            AnalysisRunStatus::Failed
+        } else {
+            AnalysisRunStatus::Queued
+        },
+        blocked_reason: if private_diff_blocked {
             Some(AiBlockedReason::PrivateDiffConsentRequired)
         } else {
             None
         },
         draft_seed_body: None,
         findings: vec![],
-        created_at: now,
-        completed_at: None,
+        created_at: now.clone(),
+        completed_at: if private_diff_blocked {
+            Some(now)
+        } else {
+            None
+        },
     };
     store.save_run(&key, &run)?;
     Ok(run)
@@ -2335,6 +2347,50 @@ mod active_draft_tests {
         assert_eq!(cancelled.status, AnalysisRunStatus::Cancelled);
         assert!(cancelled.completed_at.is_some());
         assert_eq!(archived.status, AnalysisRunStatus::Archived);
+    }
+
+    #[test]
+    fn start_analysis_run_persists_failed_run_when_private_diff_consent_is_missing() {
+        let _guard = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(temp.path()).expect("set temp dir");
+
+        let run = start_analysis_run(StartAnalysisRunRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            files: vec![ChangedFile::new("src/lib.rs", Some("@@ -1 +1"))],
+            mode: AnalysisRunMode::Fast,
+            model: "gpt-5.5".to_string(),
+            reasoning_effort: ReasoningEffort::Medium,
+            review_language: Locale::En,
+            head_sha: Some("head".to_string()),
+            diff_hash: Some("diff".to_string()),
+            context_hash: Some("context".to_string()),
+            custom_prompt: None,
+            selected_files: None,
+            excluded_files: None,
+            private_diff_consent_required: true,
+            private_diff_consent_accepted: false,
+        })
+        .expect("start blocked analysis run");
+
+        let listed = list_analysis_runs(ListAnalysisRunsRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+        })
+        .expect("list analysis runs");
+
+        std::env::set_current_dir(original_dir).expect("restore dir");
+        assert_eq!(run.status, AnalysisRunStatus::Failed);
+        assert_eq!(
+            run.blocked_reason,
+            Some(AiBlockedReason::PrivateDiffConsentRequired)
+        );
+        assert!(run.completed_at.is_some());
+        assert_eq!(listed[0].status, AnalysisRunStatus::Failed);
     }
 
     fn sample_review_draft(draft_id: &str, body: &str) -> ReviewDraft {
