@@ -90,7 +90,9 @@ fn is_selected_not_dismissed(comment: &InlineCommentDraft) -> bool {
 }
 
 fn is_selected_not_dismissed_invalid_mapping(comment: &InlineCommentDraft) -> bool {
-    is_selected_not_dismissed(comment) && comment.mapping_status != InlineMappingStatus::Valid
+    is_selected_not_dismissed(comment)
+        && !comment.body.trim().is_empty()
+        && comment.mapping_status != InlineMappingStatus::Valid
 }
 
 fn is_publishable_inline(comment: &InlineCommentDraft) -> bool {

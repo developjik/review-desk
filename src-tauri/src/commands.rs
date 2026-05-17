@@ -1728,12 +1728,10 @@ pub async fn confirm_submit_review(
         }
     };
 
-    let now = chrono::Utc::now().to_rfc3339();
-    save_publish_attempt(
-        &store,
-        &key,
-        PublishAttempt {
-            attempt_id: new_publish_attempt_id()?,
+    if let Ok(attempt_id) = new_publish_attempt_id() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let attempt = PublishAttempt {
+            attempt_id,
             draft_id: None,
             confirmation_id: request.confirmation_id.clone(),
             payload: request.payload.clone(),
@@ -1744,8 +1742,10 @@ pub async fn confirm_submit_review(
             error_message: None,
             created_at: now.clone(),
             completed_at: Some(now),
-        },
-    )?;
+        };
+        // GitHub has accepted the review; local audit persistence must not make the command look failed.
+        let _ = store.save_publish_attempt(&key, &attempt);
+    }
 
     Ok(SubmittedReviewView {
         id: response.id,
@@ -1793,15 +1793,6 @@ fn record_failed_publish_attempt(
         completed_at: Some(now),
     };
     let _ = store.save_publish_attempt(key, &attempt);
-}
-
-fn save_publish_attempt(
-    store: &WorkspaceStore,
-    key: &PrWorkspaceKey,
-    attempt: PublishAttempt,
-) -> CommandResult<()> {
-    store.save_publish_attempt(key, &attempt)?;
-    Ok(())
 }
 
 fn new_publish_attempt_id() -> CommandResult<String> {
@@ -2069,7 +2060,7 @@ fn safe_slug(value: &str) -> String {
 fn github_error_code(kind: GitHubErrorKind) -> &'static str {
     match kind {
         GitHubErrorKind::AuthRequired => "github_auth_required",
-        GitHubErrorKind::ScopeMissing => "github_scope_missing",
+        GitHubErrorKind::ScopeMissing => "github_scope_insufficient",
         GitHubErrorKind::SsoRequired => "github_sso_required",
         GitHubErrorKind::RateLimited => "github_rate_limited",
         GitHubErrorKind::SecondaryRateLimited => "github_secondary_rate_limited",
@@ -2077,5 +2068,18 @@ fn github_error_code(kind: GitHubErrorKind) -> &'static str {
         GitHubErrorKind::NotFound => "github_not_found",
         GitHubErrorKind::Network => "github_network",
         GitHubErrorKind::Unknown => "github_unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_scope_missing_error_code_matches_publish_preflight_blocker() {
+        assert_eq!(
+            github_error_code(GitHubErrorKind::ScopeMissing),
+            "github_scope_insufficient"
+        );
     }
 }

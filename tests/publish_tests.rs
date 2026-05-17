@@ -71,6 +71,22 @@ fn publish_invalid_selected_inline_mapping_blocks() {
 }
 
 #[test]
+fn publish_selected_blank_invalid_inline_mapping_does_not_block_top_level_review() {
+    let mut payload = payload();
+    payload.body = "top level review".to_string();
+    let mut comment = inline_comment("blank-invalid");
+    comment.body = "  ".to_string();
+    comment.mapping_status = InlineMappingStatus::InvalidLine;
+    payload.inline_comments = vec![comment];
+
+    let view = prepare(payload);
+
+    assert_eq!(view.status, PreparedReviewPublishStatus::Ready);
+    assert!(view.blocked_reasons.is_empty());
+    assert!(view.confirmation_id.is_some());
+}
+
+#[test]
 fn publish_confirmation_id_changes_when_body_changes() {
     let mut first = payload();
     let mut second = first.clone();
