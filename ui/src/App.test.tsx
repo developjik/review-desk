@@ -13,6 +13,7 @@ vi.mock("./lib/ipc", () => ({
   loadReviewQueue: vi.fn(),
   collectPrContext: vi.fn(),
   listAnalysisRuns: vi.fn(),
+  listReviewDrafts: vi.fn().mockResolvedValue([]),
   readReviewDraft: vi.fn(),
   openExternalUrl: vi.fn(),
   pollCodexChatGptLogin: vi.fn(),
@@ -77,6 +78,9 @@ function sampleReviewDraft(overrides: Partial<ReviewDraftView> = {}): ReviewDraf
 describe("ReviewDesk app shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(ipc.listAnalysisRuns).mockResolvedValue([]);
+    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([]);
+    vi.mocked(ipc.readReviewDraft).mockRejectedValue(new Error("draft_not_found"));
   });
 
   afterEach(() => {
@@ -117,7 +121,9 @@ describe("ReviewDesk app shell", () => {
       sampleAnalysisRun({ run_id: "run-a", mode: "fast" }),
       sampleAnalysisRun({ run_id: "run-b", mode: "deep" }),
     ]);
-    vi.mocked(ipc.readReviewDraft).mockResolvedValue(sampleReviewDraft({ draft_id: "draft-a", body: "User edited draft" }));
+    const activeDraft = sampleReviewDraft({ draft_id: "draft-a", body: "User edited draft" });
+    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([activeDraft]);
+    vi.mocked(ipc.readReviewDraft).mockResolvedValue(activeDraft);
 
     render(<App />);
 
@@ -125,5 +131,38 @@ describe("ReviewDesk app shell", () => {
     expect(await screen.findByText("run-a")).toBeTruthy();
     expect(await screen.findByText("run-b")).toBeTruthy();
     expect(await screen.findByDisplayValue("User edited draft")).toBeTruthy();
+  });
+
+  it("loads the active workspace draft from listed drafts without reading a literal active id", async () => {
+    const queue = sampleQueue();
+    const recentDraft = sampleReviewDraft({
+      draft_id: "draft-recent",
+      body: "Persisted active draft",
+      updated_at: "2026-05-17T00:00:03Z",
+    });
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
+    vi.mocked(ipc.listAnalysisRuns).mockResolvedValue([]);
+    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([
+      sampleReviewDraft({ draft_id: "draft-old", body: "Old draft", updated_at: "2026-05-17T00:00:01Z" }),
+      recentDraft,
+    ]);
+    vi.mocked(ipc.readReviewDraft).mockImplementation(async ({ draft_id }) => {
+      if (draft_id === "active") throw new Error("literal active id should not be read");
+      return recentDraft;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByDisplayValue("Persisted active draft")).toBeTruthy();
+    expect(ipc.readReviewDraft).toHaveBeenCalledWith({
+      owner: queue[0].owner,
+      repo: queue[0].repo,
+      number: queue[0].number,
+      draft_id: "draft-recent",
+    });
+    expect(ipc.readReviewDraft).not.toHaveBeenCalledWith(expect.objectContaining({ draft_id: "active" }));
   });
 });
