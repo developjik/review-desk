@@ -39,6 +39,7 @@ fn main() {
             commands::mark_active_draft,
             commands::save_draft,
             commands::prepare_submit_review,
+            commands::validate_inline_comments,
             commands::confirm_submit_review,
             commands::open_external_url,
         ])

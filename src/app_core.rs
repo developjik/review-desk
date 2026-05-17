@@ -812,6 +812,11 @@ pub fn allowed_ipc_commands() -> &'static [IpcCommandSpec] {
             credential_exposure: false,
         },
         IpcCommandSpec {
+            name: "validate_inline_comments",
+            risk: CommandRisk::ReadOnly,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
             name: "confirm_submit_review",
             risk: CommandRisk::WritesRemote,
             credential_exposure: false,

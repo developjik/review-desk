@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-validate-inline-comments"
+description = "Enables the validate_inline_comments command without any pre-configured scope."
+commands.allow = ["validate_inline_comments"]
+
+[[permission]]
+identifier = "deny-validate-inline-comments"
+description = "Denies the validate_inline_comments command without any pre-configured scope."
+commands.deny = ["validate_inline_comments"]

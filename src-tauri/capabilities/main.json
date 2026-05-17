@@ -25,6 +25,7 @@
     "allow-poll-codex-chatgpt-login",
     "allow-poll-github-oauth",
     "allow-prepare-submit-review",
+    "allow-validate-inline-comments",
     "allow-read-codex-account",
     "allow-read-codex-rate-limits",
     "allow-read-review-draft",

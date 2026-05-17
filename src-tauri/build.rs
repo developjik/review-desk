@@ -35,6 +35,7 @@ fn main() {
             "mark_active_draft",
             "save_draft",
             "prepare_submit_review",
+            "validate_inline_comments",
             "confirm_submit_review",
             "open_external_url",
         ])),

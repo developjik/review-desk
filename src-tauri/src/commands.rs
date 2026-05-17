@@ -9,13 +9,14 @@ use reviewdesk::app_core::{
 use reviewdesk::auth::{KeyringTokenStore, TokenKind, TokenStore};
 use reviewdesk::codex_bridge::{CodexBridge, CodexBridgeStatusView, sanitize_codex_diagnostics};
 use reviewdesk::domain::{
-    ChangedFile, GitHubErrorKind, PullRequestQueueItem, Repository, ReviewDeskError, ReviewDraft,
-    ReviewEvent,
+    ChangedFile, GitHubErrorKind, InlineCommentDraft, PullRequestQueueItem, Repository,
+    ReviewDeskError, ReviewDraft, ReviewEvent,
 };
 use reviewdesk::github::{
     DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitRequest, SubmittedReviewResponse,
     build_github_authorize_url, pkce_challenge_s256,
 };
+use reviewdesk::inline_comments::validate_inline_comments as validate_inline_comments_core;
 use reviewdesk::review::{ReviewPipeline, build_review_input};
 use reviewdesk::security::PrivateDiffConsent;
 use reviewdesk::storage::LocalStore;
@@ -1530,6 +1531,24 @@ pub fn save_draft(request: SaveDraftRequest) -> CommandResult<String> {
 #[tauri::command]
 pub fn prepare_submit_review(request: SubmitPreflightInput) -> SubmitPreflightView {
     prepare_submit_review_core(request)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ValidateInlineCommentsRequest {
+    pub comments: Vec<InlineCommentDraft>,
+    pub files: Vec<ChangedFile>,
+    pub diff_hash: String,
+}
+
+#[tauri::command]
+pub fn validate_inline_comments(
+    request: ValidateInlineCommentsRequest,
+) -> CommandResult<Vec<InlineCommentDraft>> {
+    Ok(validate_inline_comments_core(
+        &request.comments,
+        &request.files,
+        &request.diff_hash,
+    )?)
 }
 
 #[derive(Debug, Clone, Deserialize)]

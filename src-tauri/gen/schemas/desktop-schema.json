@@ -561,6 +561,12 @@
           "markdownDescription": "Enables the start_github_oauth command without any pre-configured scope."
         },
         {
+          "description": "Enables the validate_inline_comments command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-inline-comments",
+          "markdownDescription": "Enables the validate_inline_comments command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_agent_run command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-agent-run",
@@ -775,6 +781,12 @@
           "type": "string",
           "const": "deny-start-github-oauth",
           "markdownDescription": "Denies the start_github_oauth command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_inline_comments command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-inline-comments",
+          "markdownDescription": "Denies the validate_inline_comments command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
