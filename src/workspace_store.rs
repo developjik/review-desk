@@ -110,7 +110,7 @@ impl WorkspaceStore {
         let draft: ReviewDraft =
             self.local
                 .load_json(&format!("{}/drafts/{}.json", key.base_relative(), draft_id))?;
-        validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)?;
+        validate_draft_identity(key, draft_id, &draft)?;
         Ok(draft)
     }
 
@@ -141,13 +141,17 @@ impl WorkspaceStore {
                     .file_name()
                     .and_then(|value| value.to_str())
                     .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
+                let draft_id = path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
                 let draft: ReviewDraft = self.local.load_json(&format!(
                     "{}/drafts/{}",
                     key.base_relative(),
                     file_name
                 ))?;
-                validate_segment("draft_id", &draft.draft_id)?;
-                validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)?;
+                validate_segment("draft_id", draft_id)?;
+                validate_draft_identity(key, draft_id, &draft)?;
                 Ok(draft)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -185,6 +189,7 @@ impl WorkspaceStore {
             .local
             .load_json(&format!("{}/drafts/active.json", key.base_relative()))?;
         validate_segment("draft_id", &draft_id)?;
+        self.read_draft(key, &draft_id)?;
         Ok(Some(draft_id))
     }
 
@@ -220,6 +225,21 @@ fn validate_pr_identity(key: &PrWorkspaceKey, owner: &str, repo: &str, number: u
         )));
     }
     Ok(())
+}
+
+fn validate_draft_identity(
+    key: &PrWorkspaceKey,
+    expected_draft_id: &str,
+    draft: &ReviewDraft,
+) -> Result<()> {
+    validate_segment("draft_id", &draft.draft_id)?;
+    if draft.draft_id != expected_draft_id {
+        return Err(ReviewDeskError::InvalidPath(format!(
+            "draft identity does not match requested id: {} != {expected_draft_id}",
+            draft.draft_id
+        )));
+    }
+    validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)
 }
 
 fn validate_segment(label: &str, value: &str) -> Result<()> {

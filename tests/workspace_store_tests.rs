@@ -120,6 +120,23 @@ fn workspace_store_rejects_tampered_active_draft_id_on_read() {
 }
 
 #[test]
+fn workspace_store_rejects_stale_active_draft_marker_after_draft_deleted() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let draft_path = store
+        .save_draft(&key, &sample_draft("draft-a", "run-a"))
+        .expect("save draft");
+    store
+        .mark_active_draft(&key, "draft-a")
+        .expect("active draft");
+
+    std::fs::remove_file(draft_path).expect("delete active draft");
+
+    assert!(store.read_active_draft_id(&key).is_err());
+}
+
+#[test]
 fn workspace_store_rejects_missing_active_draft_without_creating_dangling_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = WorkspaceStore::init(temp.path()).expect("store");
@@ -127,6 +144,23 @@ fn workspace_store_rejects_missing_active_draft_without_creating_dangling_state(
     let active_path = active_draft_path(temp.path());
 
     assert!(store.mark_active_draft(&key, "missing-draft").is_err());
+    assert!(!active_path.exists());
+}
+
+#[test]
+fn workspace_store_rejects_loaded_draft_id_that_does_not_match_requested_id() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let active_path = active_draft_path(temp.path());
+    let draft_path = store
+        .save_draft(&key, &sample_draft("draft-a", "run-a"))
+        .expect("save draft");
+    tamper_json_field(&draft_path, "draft_id", serde_json::json!("draft-b"));
+
+    assert!(store.read_draft(&key, "draft-a").is_err());
+    assert!(store.list_drafts(&key).is_err());
+    assert!(store.mark_active_draft(&key, "draft-a").is_err());
     assert!(!active_path.exists());
 }
 
