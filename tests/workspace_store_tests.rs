@@ -3,6 +3,7 @@ use reviewdesk::domain::{
     AnalysisRun, AnalysisRunMode, AnalysisRunStatus, ReviewDraft, ReviewEvent,
 };
 use reviewdesk::workspace_store::{PrWorkspaceKey, WorkspaceStore};
+use std::path::Path;
 
 #[test]
 fn workspace_store_groups_artifacts_by_pr_with_owner_only_permissions() {
@@ -27,12 +28,71 @@ fn workspace_store_groups_artifacts_by_pr_with_owner_only_permissions() {
         store.read_active_draft_id(&key).expect("active"),
         Some("draft-a".to_string())
     );
+
+    assert_owner_only_dir(temp.path().join(".reviewdesk/workspaces"));
+    assert_owner_only_dir(temp.path().join(".reviewdesk/workspaces/company"));
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web"),
+    );
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582"),
+    );
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/snapshots"),
+    );
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/runs"),
+    );
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/drafts"),
+    );
+    assert_owner_only_dir(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/publish_attempts"),
+    );
+    assert_owner_only_file(&run_path);
+    assert_owner_only_file(&draft_path);
+    assert_owner_only_file(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/drafts/active.json"),
+    );
 }
 
 #[test]
 fn workspace_store_rejects_path_traversal_in_owner_repo_and_ids() {
     assert!(PrWorkspaceKey::new("../company", "payment-web", 582).is_err());
     assert!(PrWorkspaceKey::new("company", "../payment-web", 582).is_err());
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+
+    for invalid_id in ["", "..", "../run-a", "run/a", "run\\a", ".run-a"] {
+        let run = sample_run(invalid_id);
+        assert!(
+            store.save_run(&key, &run).is_err(),
+            "run_id should be rejected: {invalid_id:?}"
+        );
+
+        let draft = sample_draft(invalid_id, "run-a");
+        assert!(
+            store.save_draft(&key, &draft).is_err(),
+            "draft_id should be rejected on save: {invalid_id:?}"
+        );
+        assert!(
+            store.read_draft(&key, invalid_id).is_err(),
+            "draft_id should be rejected on read: {invalid_id:?}"
+        );
+        assert!(
+            store.mark_active_draft(&key, invalid_id).is_err(),
+            "active draft_id should be rejected: {invalid_id:?}"
+        );
+    }
 }
 
 fn sample_run(run_id: &str) -> AnalysisRun {
@@ -80,3 +140,33 @@ fn sample_draft(draft_id: &str, run_id: &str) -> ReviewDraft {
         updated_at: "2026-05-17T00:00:02Z".to_string(),
     }
 }
+
+#[cfg(unix)]
+fn assert_owner_only_dir(path: impl AsRef<Path>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path.as_ref())
+        .expect("dir metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o700, "dir mode for {}", path.as_ref().display());
+}
+
+#[cfg(not(unix))]
+fn assert_owner_only_dir(_path: impl AsRef<Path>) {}
+
+#[cfg(unix)]
+fn assert_owner_only_file(path: impl AsRef<Path>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path.as_ref())
+        .expect("file metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600, "file mode for {}", path.as_ref().display());
+}
+
+#[cfg(not(unix))]
+fn assert_owner_only_file(_path: impl AsRef<Path>) {}
