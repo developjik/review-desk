@@ -1183,11 +1183,14 @@ pub struct GenerateReviewDraftRequest {
     pub repo: String,
     pub number: u64,
     pub files: Vec<ChangedFile>,
+    pub mode: Option<AnalysisRunMode>,
     pub model: String,
     pub reasoning_depth: String,
     pub reasoning_effort: Option<String>,
     pub review_language: Option<Locale>,
     pub head_sha: Option<String>,
+    pub diff_hash: Option<String>,
+    pub context_hash: Option<String>,
     pub private_diff_consent_required: bool,
     pub private_diff_consent_accepted: bool,
 }
@@ -1426,7 +1429,10 @@ async fn run_agent_review(
     let head_sha = request.head_sha.clone().unwrap_or_default();
     let run_id =
         reviewdesk::review::new_analysis_run_id(&request.owner, &request.repo, request.number);
-    let diff_hash = reviewdesk::review::stable_changed_files_hash(&request.files);
+    let diff_hash = request
+        .diff_hash
+        .clone()
+        .unwrap_or_else(|| reviewdesk::review::stable_changed_files_hash(&request.files));
     let rate_limit = codex_rate_limit_snapshot().await;
     let mut run = AgentRunRecordView {
         run_id,
@@ -1452,7 +1458,12 @@ async fn run_agent_review(
     };
 
     if request.private_diff_consent_required && !request.private_diff_consent_accepted {
-        return blocked_generated_draft(state, run, AiBlockedReason::PrivateDiffConsentRequired);
+        return blocked_generated_draft(
+            &request,
+            state,
+            run,
+            AiBlockedReason::PrivateDiffConsentRequired,
+        );
     }
 
     let connection = codex_ai_connection_status().await;
@@ -1461,21 +1472,26 @@ async fn run_agent_review(
         let reason = connection
             .blocked_reason
             .unwrap_or(AiBlockedReason::CodexChatgptAuthRequired);
-        return blocked_generated_draft(state, run, reason);
+        return blocked_generated_draft(&request, state, run, reason);
     }
 
     let models = codex_ai_models_for(&connection).await;
     if models.is_empty() {
-        return blocked_generated_draft(state, run, AiBlockedReason::ModelListUnavailable);
+        return blocked_generated_draft(&request, state, run, AiBlockedReason::ModelListUnavailable);
     }
     if let Err(reason) = validate_ai_run_configuration(&models, &request.model, reasoning_effort) {
-        return blocked_generated_draft(state, run, reason);
+        return blocked_generated_draft(&request, state, run, reason);
     }
     if let Some(reason) = rate_limit.blocked_reason {
-        return blocked_generated_draft(state, run, reason);
+        return blocked_generated_draft(&request, state, run, reason);
     }
     if !codex_generation_available().await {
-        return blocked_generated_draft(state, run, AiBlockedReason::GenerationAdapterUnavailable);
+        return blocked_generated_draft(
+            &request,
+            state,
+            run,
+            AiBlockedReason::GenerationAdapterUnavailable,
+        );
     }
 
     let input = build_review_input(
@@ -1527,6 +1543,7 @@ async fn run_agent_review(
                 run.blocked_reason = Some(reason);
                 run.completed_at = Some(chrono::Utc::now().to_rfc3339());
                 remember_agent_run(&state, &run, None, None, Some(reason.as_str().to_string()))?;
+                persist_legacy_analysis_run(&request, &run, AnalysisRunStatus::Failed, None)?;
                 return Ok(GeneratedDraftView {
                     status: "failed".to_string(),
                     body: String::new(),
@@ -1557,6 +1574,12 @@ async fn run_agent_review(
         Some(draft_body.clone()),
         Some(format!("{}\n{}", report_path.display(), run_path.display())),
         disabled_reason.clone(),
+    )?;
+    persist_legacy_analysis_run(
+        &request,
+        &run,
+        AnalysisRunStatus::DraftReady,
+        Some(draft_body.clone()),
     )?;
 
     Ok(GeneratedDraftView {
@@ -1777,6 +1800,15 @@ pub async fn confirm_submit_review(
             return Err(error);
         }
     };
+    client.current_user().await.map_err(|error| {
+        record_publish_error(
+            &store,
+            &key,
+            &request.payload,
+            &request.confirmation_id,
+            error,
+        )
+    })?;
     let snapshot = client
         .pull_request_snapshot(
             &request.payload.owner,
@@ -1817,8 +1849,24 @@ pub async fn confirm_submit_review(
         })
         .collect::<Vec<_>>();
     let current_diff_hash = stable_changed_files_hash(&changed_files);
-    let preflight = prepare_review_publish(
+    let payload = payload_with_validated_inline_comments(
         request.payload.clone(),
+        &changed_files,
+        &current_diff_hash,
+    )
+    .map_err(|error| {
+        let error = CommandError::from(error);
+        record_failed_publish_attempt(
+            &store,
+            &key,
+            &request.payload,
+            &request.confirmation_id,
+            &error,
+        );
+        error
+    })?;
+    let preflight = prepare_review_publish(
+        payload.clone(),
         true,
         true,
         false,
@@ -1837,7 +1885,7 @@ pub async fn confirm_submit_review(
         record_failed_publish_attempt(
             &store,
             &key,
-            &request.payload,
+            &payload,
             &request.confirmation_id,
             &error,
         );
@@ -1851,14 +1899,14 @@ pub async fn confirm_submit_review(
         record_failed_publish_attempt(
             &store,
             &key,
-            &request.payload,
+            &payload,
             &request.confirmation_id,
             &error,
         );
         return Err(error);
     }
 
-    let comments = publishable_inline_comments(&request.payload)
+    let comments = publishable_inline_comments(&payload)
         .map(|comment| ReviewSubmitComment {
             path: comment.path.clone(),
             side: comment.side.clone(),
@@ -1871,8 +1919,8 @@ pub async fn confirm_submit_review(
 
     let submit_request = ReviewSubmitRequest {
         commit_id: snapshot.head_sha.clone(),
-        event: request.payload.event,
-        body: request.payload.body.clone(),
+        event: payload.event,
+        body: payload.body.clone(),
         comments,
     };
 
@@ -1890,7 +1938,7 @@ pub async fn confirm_submit_review(
             let error = record_publish_error(
                 &store,
                 &key,
-                &request.payload,
+                &payload,
                 &request.confirmation_id,
                 error,
             );
@@ -1904,7 +1952,7 @@ pub async fn confirm_submit_review(
             attempt_id,
             draft_id: None,
             confirmation_id: request.confirmation_id.clone(),
-            payload: request.payload.clone(),
+            payload: payload.clone(),
             github_account: None,
             status: "succeeded".to_string(),
             github_review_id: Some(response.id),
@@ -1924,6 +1972,16 @@ pub async fn confirm_submit_review(
             request.payload.owner, request.payload.repo, request.payload.number, response.id
         ),
     })
+}
+
+fn payload_with_validated_inline_comments(
+    mut payload: ReviewPublishPayload,
+    files: &[ChangedFile],
+    diff_hash: &str,
+) -> std::result::Result<ReviewPublishPayload, ReviewDeskError> {
+    payload.inline_comments =
+        validate_inline_comments_core(&payload.inline_comments, files, diff_hash)?;
+    Ok(payload)
 }
 
 fn record_publish_error(
@@ -2095,6 +2153,7 @@ fn parse_reasoning_effort(value: &str) -> CommandResult<ReasoningEffort> {
 }
 
 fn blocked_generated_draft(
+    request: &GenerateReviewDraftRequest,
     state: tauri::State<'_, ReviewDeskTauriState>,
     mut run: AgentRunRecordView,
     reason: AiBlockedReason,
@@ -2117,6 +2176,7 @@ fn blocked_generated_draft(
         report_path.clone(),
         Some(reason.as_str().to_string()),
     )?;
+    persist_legacy_analysis_run(request, &run, AnalysisRunStatus::Failed, None)?;
 
     Ok(GeneratedDraftView {
         status: "blocked".to_string(),
@@ -2149,6 +2209,56 @@ fn remember_agent_run(
             },
         );
     Ok(())
+}
+
+fn persist_legacy_analysis_run(
+    request: &GenerateReviewDraftRequest,
+    run: &AgentRunRecordView,
+    status: AnalysisRunStatus,
+    draft_seed_body: Option<String>,
+) -> CommandResult<()> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(&request.owner, &request.repo, request.number)?;
+    let analysis_run = legacy_analysis_run_from_agent_run(request, run, status, draft_seed_body);
+    store.save_run(&key, &analysis_run)?;
+    Ok(())
+}
+
+fn legacy_analysis_run_from_agent_run(
+    request: &GenerateReviewDraftRequest,
+    run: &AgentRunRecordView,
+    status: AnalysisRunStatus,
+    draft_seed_body: Option<String>,
+) -> AnalysisRun {
+    AnalysisRun {
+        run_id: run.run_id.clone(),
+        owner: request.owner.clone(),
+        repo: request.repo.clone(),
+        number: request.number,
+        head_sha: run.head_sha.clone(),
+        diff_hash: run.diff_hash.clone(),
+        context_hash: request.context_hash.clone().unwrap_or_default(),
+        mode: request.mode.clone().unwrap_or(AnalysisRunMode::Fast),
+        model_id: run.model_id.clone(),
+        reasoning_effort: run.reasoning_effort,
+        review_language: run.review_language,
+        custom_prompt: None,
+        prompt_version: run.prompt_version.clone(),
+        selected_files: run.selected_files.clone(),
+        excluded_files: request
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .filter(|path| !run.selected_files.contains(path))
+            .collect(),
+        private_diff_consent_snapshot: run.private_diff_consent_snapshot,
+        status,
+        blocked_reason: run.blocked_reason,
+        draft_seed_body: draft_seed_body.filter(|body| !body.trim().is_empty()),
+        findings: vec![],
+        created_at: run.started_at.clone(),
+        completed_at: run.completed_at.clone(),
+    }
 }
 
 fn mock_ai_enabled() -> bool {
@@ -2257,6 +2367,96 @@ mod active_draft_tests {
     use std::sync::Mutex;
 
     static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn legacy_agent_run_is_materialized_as_workspace_analysis_run_with_draft_seed() {
+        let request = GenerateReviewDraftRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            files: vec![ChangedFile::new("src/lib.rs", Some("@@ -1 +1"))],
+            mode: Some(AnalysisRunMode::Deep),
+            model: "gpt-5.5".to_string(),
+            reasoning_depth: "medium".to_string(),
+            reasoning_effort: Some("high".to_string()),
+            review_language: Some(Locale::En),
+            head_sha: Some("head".to_string()),
+            diff_hash: Some("diff".to_string()),
+            context_hash: Some("context".to_string()),
+            private_diff_consent_required: false,
+            private_diff_consent_accepted: true,
+        };
+        let run = AgentRunRecordView {
+            run_id: "legacy-run".to_string(),
+            pull_request_id: "company/payment-web#582".to_string(),
+            repo_full_name: "company/payment-web".to_string(),
+            pull_number: 582,
+            head_sha: "head".to_string(),
+            diff_hash: "diff".to_string(),
+            selected_files: vec!["src/lib.rs".to_string()],
+            provider: "codex_chatgpt".to_string(),
+            auth_mode: "chatgpt".to_string(),
+            plan_type: None,
+            model_id: "gpt-5.5".to_string(),
+            reasoning_effort: ReasoningEffort::High,
+            review_language: Locale::En,
+            prompt_version: "reviewdesk-0.0.9".to_string(),
+            private_diff_consent_snapshot: true,
+            rate_limit_snapshot: None,
+            status: "draft_ready".to_string(),
+            blocked_reason: None,
+            started_at: "2026-05-17T00:00:00Z".to_string(),
+            completed_at: Some("2026-05-17T00:00:01Z".to_string()),
+        };
+
+        let analysis = legacy_analysis_run_from_agent_run(
+            &request,
+            &run,
+            AnalysisRunStatus::DraftReady,
+            Some("Draft body".to_string()),
+        );
+
+        assert_eq!(analysis.run_id, "legacy-run");
+        assert_eq!(analysis.mode, AnalysisRunMode::Deep);
+        assert_eq!(analysis.context_hash, "context");
+        assert_eq!(analysis.diff_hash, "diff");
+        assert_eq!(analysis.draft_seed_body.as_deref(), Some("Draft body"));
+        assert_eq!(analysis.status, AnalysisRunStatus::DraftReady);
+    }
+
+    #[test]
+    fn publish_payload_inline_comments_are_revalidated_against_current_files() {
+        let mut payload = sample_publish_payload();
+        payload.inline_comments = vec![InlineCommentDraft {
+            id: "inline-a".to_string(),
+            path: "src/lib.rs".to_string(),
+            side: "RIGHT".to_string(),
+            line: 99,
+            start_line: None,
+            start_side: None,
+            body: "Inline body".to_string(),
+            severity: None,
+            confidence: None,
+            source_run_id: None,
+            source_finding_id: None,
+            selected_for_publish: true,
+            dismissed: false,
+            user_edited: false,
+            mapping_status: InlineMappingStatus::Valid,
+        }];
+        let files = vec![ChangedFile::new(
+            "src/lib.rs",
+            Some("@@ -1,1 +1,1 @@\n+current line"),
+        )];
+
+        let validated =
+            payload_with_validated_inline_comments(payload, &files, "current-diff").unwrap();
+
+        assert_eq!(
+            validated.inline_comments[0].mapping_status,
+            InlineMappingStatus::InvalidLine
+        );
+    }
 
     #[test]
     fn read_review_draft_resolves_active_marker_to_marked_draft() {
@@ -2425,6 +2625,22 @@ mod active_draft_tests {
             stale: false,
             created_at: "2026-05-17T00:00:00Z".to_string(),
             updated_at: "2026-05-17T00:00:01Z".to_string(),
+        }
+    }
+
+    fn sample_publish_payload() -> ReviewPublishPayload {
+        ReviewPublishPayload {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            expected_head_sha: "head".to_string(),
+            expected_diff_hash: "diff".to_string(),
+            event: ReviewEvent::Comment,
+            body: "Body".to_string(),
+            inline_comments: vec![],
+            explicit_verdict_confirmed: false,
+            private_diff_consent_required: false,
+            private_diff_consent_accepted: false,
         }
     }
 }

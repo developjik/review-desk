@@ -18,9 +18,11 @@ import {
   readReviewDraft,
   refreshAiAccountStatus,
   refreshGithubAuthStatus,
+  saveReviewDraft,
   startAgentRun,
   startCodexChatGptLogin,
   startGithubOAuth,
+  validateInlineComments,
   type ReviewPublishPayload,
   type SubmitPreflightView,
 } from "./lib/ipc";
@@ -418,11 +420,14 @@ export default function App() {
       repo: runPr.repo,
       number: runPr.number,
       files: runContext.files,
+      mode,
       model,
       reasoning_depth: reasoningDepth,
       reasoning_effort: reasoningDepth,
       review_language: languagePreferences.review_locale,
       head_sha: runContext.pr.head_sha,
+      diff_hash: runContext.diff_hash,
+      context_hash: runContext.context_hash,
       private_diff_consent_required: true,
       private_diff_consent_accepted: privateConsent,
     }).catch((error: unknown) => ({
@@ -444,6 +449,7 @@ export default function App() {
         setDraft(result.body);
         setDraftDirtySincePreflight(true);
         setPreflight(null);
+        if (generatedDraft) persistDraft(generatedDraft);
       }
     }
   }
@@ -451,12 +457,15 @@ export default function App() {
   async function prepareSubmit() {
     if (!selectedPr || !context) return;
     setSubmitMessage(null);
-    const payload = currentReviewPublishPayload(selectedPr, context);
+    const validatedDraft = await validateActiveDraftInlineComments();
+    if (validatedDraft === undefined) return;
+    const payload = currentReviewPublishPayload(selectedPr, context, validatedDraft);
+    const githubAuth = githubPublishAuth(status.github);
     const next = await prepareSubmitReview({
       payload,
-      github_connected: status.github === "connected",
-      write_scope_valid: true,
-      sso_required: false,
+      github_connected: githubAuth.github_connected,
+      write_scope_valid: githubAuth.write_scope_valid,
+      sso_required: githubAuth.sso_required,
       pr_open: context.pr.state === "open",
       pr_merged: context.pr.merged,
       current_head_sha: context.pr.head_sha,
@@ -472,7 +481,9 @@ export default function App() {
     setSubmitting(true);
     setSubmitMessage("Submitting review...");
     try {
-      const payload = currentReviewPublishPayload(selectedPr, context);
+      const validatedDraft = await validateActiveDraftInlineComments();
+      if (validatedDraft === undefined) return;
+      const payload = currentReviewPublishPayload(selectedPr, context, validatedDraft);
       const submitted = await confirmSubmitReview({
         payload,
         confirmation_id: preflight.confirmation_id,
@@ -490,6 +501,9 @@ export default function App() {
 
   function updateDraft(next: string) {
     setDraft(next);
+    if (activeDraft) {
+      persistDraft({ ...activeDraft, body: next, user_edited: true, updated_at: new Date().toISOString() });
+    }
     dispatchWorkspace({ type: "edit_draft_body", body: next });
     setDraftDirtySincePreflight(true);
     setPreflight(null);
@@ -500,16 +514,18 @@ export default function App() {
   function currentReviewPublishPayload(
     target: PullRequestQueueItem,
     currentContext: PullRequestContextView,
+    draftOverride?: ReviewDraftView | null,
   ): ReviewPublishPayload {
+    const payloadDraft = draftOverride === undefined ? activeDraft : draftOverride;
     return {
       owner: target.owner,
       repo: target.repo,
       number: target.number,
-      expected_head_sha: currentContext.pr.head_sha,
-      expected_diff_hash: currentContext.diff_hash,
-      body: activeDraftBody,
-      event: activeDraft?.verdict ?? verdict,
-      inline_comments: activeDraft?.inline_comments ?? [],
+      expected_head_sha: payloadDraft?.base_head_sha ?? currentContext.pr.head_sha,
+      expected_diff_hash: payloadDraft?.base_diff_hash ?? currentContext.diff_hash,
+      body: payloadDraft?.body ?? activeDraftBody,
+      event: payloadDraft?.verdict ?? verdict,
+      inline_comments: payloadDraft?.inline_comments ?? [],
       explicit_verdict_confirmed: explicitVerdict,
       private_diff_consent_required: agentStatus !== "blocked",
       private_diff_consent_accepted: privateConsent,
@@ -519,7 +535,9 @@ export default function App() {
   function updateVerdict(next: Verdict) {
     setVerdict(next);
     if (activeDraft) {
-      dispatchWorkspace({ type: "replace_draft_from_run", draft: { ...activeDraft, verdict: next, user_edited: true, updated_at: new Date().toISOString() } });
+      const nextDraft = { ...activeDraft, verdict: next, user_edited: true, updated_at: new Date().toISOString() };
+      dispatchWorkspace({ type: "replace_draft_from_run", draft: nextDraft });
+      persistDraft(nextDraft);
     }
     setExplicitVerdict(next === "COMMENT");
     setDraftDirtySincePreflight(true);
@@ -532,6 +550,7 @@ export default function App() {
     const body = run.draft_seed_body ?? "";
     const nextDraft = reviewDraftFromRun(run, body, activeDraft?.verdict ?? verdict);
     dispatchWorkspace({ type: "replace_draft_from_run", draft: nextDraft });
+    persistDraft(nextDraft);
     setDraft(nextDraft.body);
     setVerdict(nextDraft.verdict);
     setDraftDirtySincePreflight(true);
@@ -542,6 +561,7 @@ export default function App() {
   function updateInlineSelection(id: string, selected: boolean) {
     if (!activeDraft) return;
     const comments = setInlineCommentSelection(activeDraft.inline_comments, id, selected);
+    persistDraft({ ...activeDraft, inline_comments: comments, updated_at: new Date().toISOString() });
     dispatchWorkspace({ type: "validate_inline_success", comments });
     setDraftDirtySincePreflight(true);
     setPreflight(null);
@@ -550,9 +570,32 @@ export default function App() {
   function dismissInline(id: string) {
     if (!activeDraft) return;
     const comments = dismissInlineCommentById(activeDraft.inline_comments, id);
+    persistDraft({ ...activeDraft, inline_comments: comments, updated_at: new Date().toISOString() });
     dispatchWorkspace({ type: "validate_inline_success", comments });
     setDraftDirtySincePreflight(true);
     setPreflight(null);
+  }
+
+  async function validateActiveDraftInlineComments(): Promise<ReviewDraftView | null | undefined> {
+    if (!activeDraft || !context) return activeDraft;
+    try {
+      const comments = await validateInlineComments({
+        comments: activeDraft.inline_comments,
+        files: context.files,
+        diff_hash: context.diff_hash,
+      });
+      const nextDraft = { ...activeDraft, inline_comments: comments, updated_at: new Date().toISOString() };
+      dispatchWorkspace({ type: "validate_inline_success", comments });
+      persistDraft(nextDraft);
+      return nextDraft;
+    } catch (error) {
+      setSubmitMessage(error instanceof Error ? error.message : "inline_validation_failed");
+      return undefined;
+    }
+  }
+
+  function persistDraft(nextDraft: ReviewDraftView) {
+    void saveReviewDraft({ draft: nextDraft, mark_active: true }).catch(() => undefined);
   }
 
   if (shouldShowStartupGate(status)) {
@@ -699,6 +742,19 @@ async function loadWorkspaceDraft(input: {
   number: number;
 }): Promise<ReviewDraftView | null> {
   return readReviewDraft({ ...input, draft_id: "active" }).catch(() => null);
+}
+
+function githubPublishAuth(github: AppStatusView["github"]): {
+  github_connected: boolean;
+  write_scope_valid: boolean;
+  sso_required: boolean;
+} {
+  const connectedLike = github === "connected" || github === "scope_missing" || github === "sso_required";
+  return {
+    github_connected: connectedLike,
+    write_scope_valid: github === "connected" || github === "sso_required",
+    sso_required: github === "sso_required",
+  };
 }
 
 function samePullRequest(left: PullRequestQueueItem | null, right: PullRequestQueueItem): boolean {

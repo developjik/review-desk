@@ -1,6 +1,7 @@
 use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
 use reviewdesk::domain::{ChangedFile, ReviewEvent};
+use reviewdesk::domain::{GitHubErrorKind, ReviewDeskError};
 use reviewdesk::github::{
     CiRollupState, DevicePoll, GitHubClient, ReviewSubmitComment, ReviewSubmitRequest,
     StaleCheckInput, StaleStatus, assigned_query, build_github_authorize_url, parse_pr_reference,
@@ -253,6 +254,54 @@ async fn fetches_current_user_and_accessible_repositories() {
     assert_eq!(repositories.len(), 2);
     assert_eq!(repositories[0].full_name, "company/payment-web");
     assert!(repositories[0].private);
+}
+
+#[tokio::test]
+async fn current_user_surfaces_scope_missing_before_publish_attempts() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/user");
+        then.status(403)
+            .header("content-type", "application/json")
+            .json_body_obj(&serde_json::json!({
+                "message": "Resource not accessible by integration"
+            }));
+    });
+
+    let client = GitHubClient::for_test(server.url(""), server.url(""), "token");
+    let error = client.current_user().await.expect_err("scope missing");
+
+    assert!(matches!(
+        error,
+        ReviewDeskError::GitHubApi {
+            kind: GitHubErrorKind::ScopeMissing,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn current_user_surfaces_sso_required_before_publish_attempts() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/user");
+        then.status(403)
+            .header("content-type", "application/json")
+            .json_body_obj(&serde_json::json!({
+                "message": "Resource protected by organization SAML enforcement"
+            }));
+    });
+
+    let client = GitHubClient::for_test(server.url(""), server.url(""), "token");
+    let error = client.current_user().await.expect_err("sso required");
+
+    assert!(matches!(
+        error,
+        ReviewDeskError::GitHubApi {
+            kind: GitHubErrorKind::SsoRequired,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

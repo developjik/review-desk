@@ -13,7 +13,9 @@ vi.mock("./lib/ipc", () => ({
   loadReviewQueue: vi.fn(),
   collectPrContext: vi.fn(),
   listAnalysisRuns: vi.fn(),
+  saveReviewDraft: vi.fn(),
   readReviewDraft: vi.fn(),
+  validateInlineComments: vi.fn(),
   openExternalUrl: vi.fn(),
   pollCodexChatGptLogin: vi.fn(),
   pollGithubOAuth: vi.fn(),
@@ -74,11 +76,36 @@ function sampleReviewDraft(overrides: Partial<ReviewDraftView> = {}): ReviewDraf
   };
 }
 
+function sampleInlineComment(
+  overrides: Partial<ReviewDraftView["inline_comments"][number]> = {},
+): ReviewDraftView["inline_comments"][number] {
+  return {
+    id: "inline-a",
+    path: "src/lib.rs",
+    side: "RIGHT",
+    line: 1,
+    start_line: null,
+    start_side: null,
+    body: "Inline body",
+    severity: null,
+    confidence: null,
+    source_run_id: null,
+    source_finding_id: null,
+    selected_for_publish: true,
+    dismissed: false,
+    user_edited: false,
+    mapping_status: "valid",
+    ...overrides,
+  };
+}
+
 describe("ReviewDesk app shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(ipc.listAnalysisRuns).mockResolvedValue([]);
+    vi.mocked(ipc.saveReviewDraft).mockImplementation(({ draft }) => Promise.resolve(draft));
     vi.mocked(ipc.readReviewDraft).mockRejectedValue(new Error("draft_not_found"));
+    vi.mocked(ipc.validateInlineComments).mockImplementation(({ comments }) => Promise.resolve(comments));
     vi.mocked(ipc.startAgentRun).mockResolvedValue({
       status: "draft_ready",
       body: "AI draft",
@@ -177,11 +204,176 @@ describe("ReviewDesk app shell", () => {
     await waitFor(() =>
       expect(ipc.startAgentRun).toHaveBeenCalledWith(
         expect.objectContaining({
+          mode: "fast",
+          diff_hash: sampleContext(queue[0]).diff_hash,
+          context_hash: sampleContext(queue[0]).context_hash,
           private_diff_consent_required: true,
           private_diff_consent_accepted: true,
         }),
       ),
     );
+  });
+
+  it("persists generated legacy agent drafts as the active workspace draft", async () => {
+    const queue = sampleQueue();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(aiReadyStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Allow private diff analysis" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fast" }));
+
+    await waitFor(() =>
+      expect(ipc.saveReviewDraft).toHaveBeenCalledWith({
+        draft: expect.objectContaining({
+          owner: queue[0].owner,
+          repo: queue[0].repo,
+          number: queue[0].number,
+          body: "AI draft",
+          base_head_sha: sampleContext(queue[0]).pr.head_sha,
+          base_diff_hash: sampleContext(queue[0]).diff_hash,
+          source_run_ids: expect.arrayContaining([expect.stringMatching(/^legacy-/)]),
+        }),
+        mark_active: true,
+      }),
+    );
+  });
+
+  it("persists draft body verdict and inline selection edits as the active draft", async () => {
+    const queue = sampleQueue();
+    const activeDraft = sampleReviewDraft({
+      body: "Persisted body",
+      inline_comments: [sampleInlineComment({ id: "inline-a", selected_for_publish: false })],
+    });
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
+    vi.mocked(ipc.readReviewDraft).mockResolvedValue(activeDraft);
+
+    render(<App />);
+
+    const body = await screen.findByDisplayValue("Persisted body");
+    fireEvent.change(body, { target: { value: "Edited body" } });
+    fireEvent.click(screen.getByRole("button", { name: "APPROVE" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inline" }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Publish" }));
+
+    await waitFor(() =>
+      expect(ipc.saveReviewDraft).toHaveBeenCalledWith({
+        draft: expect.objectContaining({
+          draft_id: "draft-a",
+          body: "Edited body",
+          user_edited: true,
+        }),
+        mark_active: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(ipc.saveReviewDraft).toHaveBeenCalledWith({
+        draft: expect.objectContaining({
+          verdict: "APPROVE",
+          user_edited: true,
+        }),
+        mark_active: true,
+      }),
+    );
+    await waitFor(() =>
+      expect(ipc.saveReviewDraft).toHaveBeenCalledWith({
+        draft: expect.objectContaining({
+          inline_comments: [expect.objectContaining({ id: "inline-a", selected_for_publish: true })],
+        }),
+        mark_active: true,
+      }),
+    );
+  });
+
+  it("uses active draft provenance and derived GitHub auth state when preparing publish", async () => {
+    const queue = sampleQueue();
+    const context = {
+      ...sampleContext(queue[0]),
+      pr: { ...sampleContext(queue[0]).pr, head_sha: "current-head" },
+      diff_hash: "current-diff",
+    };
+    vi.mocked(ipc.getAppStatus).mockResolvedValue({ ...sampleConnectedStatus(), github: "scope_missing" });
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(context);
+    vi.mocked(ipc.readReviewDraft).mockResolvedValue(
+      sampleReviewDraft({
+        base_head_sha: "draft-head",
+        base_diff_hash: "draft-diff",
+        body: "Ready to publish",
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare" }));
+
+    await waitFor(() =>
+      expect(ipc.prepareSubmitReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          github_connected: true,
+          write_scope_valid: false,
+          sso_required: false,
+          current_head_sha: "current-head",
+          current_diff_hash: "current-diff",
+          payload: expect.objectContaining({
+            expected_head_sha: "draft-head",
+            expected_diff_hash: "draft-diff",
+          }),
+        }),
+      ),
+    );
+  });
+
+  it("validates inline comments before prepare and saves validation state", async () => {
+    const queue = sampleQueue();
+    const invalidComment = sampleInlineComment({ id: "inline-a", mapping_status: "invalid_line" });
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
+    vi.mocked(ipc.readReviewDraft).mockResolvedValue(
+      sampleReviewDraft({
+        body: "Ready to publish",
+        inline_comments: [sampleInlineComment({ id: "inline-a", mapping_status: "valid" })],
+      }),
+    );
+    vi.mocked(ipc.validateInlineComments).mockResolvedValue([invalidComment]);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare" }));
+
+    await waitFor(() =>
+      expect(ipc.validateInlineComments).toHaveBeenCalledWith(
+        expect.objectContaining({
+          diff_hash: sampleContext(queue[0]).diff_hash,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(ipc.prepareSubmitReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            inline_comments: [expect.objectContaining({ id: "inline-a", mapping_status: "invalid_line" })],
+          }),
+        }),
+      ),
+    );
+    expect(ipc.saveReviewDraft).toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        inline_comments: [expect.objectContaining({ id: "inline-a", mapping_status: "invalid_line" })],
+      }),
+      mark_active: true,
+    });
   });
 
   it("ignores slower PR selection responses after a newer PR is selected", async () => {

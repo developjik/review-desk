@@ -228,11 +228,14 @@ export interface GenerateReviewDraftInput {
   repo: string;
   number: number;
   files: ChangedFile[];
+  mode?: AnalysisRunMode;
   model: string;
   reasoning_depth: string;
   reasoning_effort: ReasoningEffort;
   review_language: Locale;
   head_sha: string | null;
+  diff_hash?: string | null;
+  context_hash?: string | null;
   private_diff_consent_required: boolean;
   private_diff_consent_accepted: boolean;
 }
