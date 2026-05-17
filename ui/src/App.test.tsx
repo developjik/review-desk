@@ -376,6 +376,53 @@ describe("ReviewDesk app shell", () => {
     });
   });
 
+  it("ignores stale inline validation during prepare after switching PRs", async () => {
+    const queue = sampleQueue();
+    const validation = deferred<ReviewDraftView["inline_comments"]>();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockImplementation((item) => Promise.resolve(sampleContext(item)));
+    vi.mocked(ipc.readReviewDraft).mockImplementation(({ repo }) =>
+      Promise.resolve(
+        sampleReviewDraft({
+          draft_id: `draft-${repo}`,
+          owner: "company",
+          repo,
+          number: repo === queue[0].repo ? queue[0].number : queue[1].number,
+          body: `Ready to publish ${repo}`,
+          inline_comments: [sampleInlineComment({ id: `inline-${repo}`, mapping_status: "valid" })],
+        }),
+      ),
+    );
+    vi.mocked(ipc.validateInlineComments).mockReturnValue(validation.promise);
+
+    render(<App />);
+
+    expect(await screen.findByDisplayValue("Ready to publish payment-web")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare" }));
+    await waitFor(() => expect(ipc.validateInlineComments).toHaveBeenCalled());
+
+    fireEvent.click(await findQueueItem("User hook refactor"));
+    await waitFor(() => expect(screen.getAllByText("company/admin#588").length).toBeGreaterThan(0));
+
+    validation.resolve([sampleInlineComment({ id: "inline-payment-web", mapping_status: "invalid_line" })]);
+    await waitFor(() => expect(ipc.validateInlineComments).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(ipc.prepareSubmitReview).not.toHaveBeenCalled();
+    expect(screen.queryByText("Review body is empty")).toBeNull();
+    expect(ipc.saveReviewDraft).not.toHaveBeenCalledWith({
+      draft: expect.objectContaining({
+        repo: "payment-web",
+        inline_comments: [expect.objectContaining({ mapping_status: "invalid_line" })],
+      }),
+      mark_active: true,
+    });
+  });
+
   it("ignores slower PR selection responses after a newer PR is selected", async () => {
     const queue = sampleQueue();
     const firstContext = deferred<ReturnType<typeof sampleContext>>();

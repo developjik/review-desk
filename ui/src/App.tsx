@@ -456,21 +456,28 @@ export default function App() {
 
   async function prepareSubmit() {
     if (!selectedPr || !context) return;
+    const submitSelectionSequence = selectionSequenceRef.current;
+    const submitPr = selectedPr;
+    const submitContext = context;
     setSubmitMessage(null);
-    const validatedDraft = await validateActiveDraftInlineComments();
-    if (validatedDraft === undefined) return;
-    const payload = currentReviewPublishPayload(selectedPr, context, validatedDraft);
+    const validatedDraft = await validateActiveDraftInlineComments({
+      selectionSequence: submitSelectionSequence,
+      pr: submitPr,
+    });
+    if (validatedDraft === undefined || !isCurrentSelection(submitSelectionSequence, submitPr)) return;
+    const payload = currentReviewPublishPayload(submitPr, submitContext, validatedDraft);
     const githubAuth = githubPublishAuth(status.github);
     const next = await prepareSubmitReview({
       payload,
       github_connected: githubAuth.github_connected,
       write_scope_valid: githubAuth.write_scope_valid,
       sso_required: githubAuth.sso_required,
-      pr_open: context.pr.state === "open",
-      pr_merged: context.pr.merged,
-      current_head_sha: context.pr.head_sha,
-      current_diff_hash: context.diff_hash,
+      pr_open: submitContext.pr.state === "open",
+      pr_merged: submitContext.pr.merged,
+      current_head_sha: submitContext.pr.head_sha,
+      current_diff_hash: submitContext.diff_hash,
     });
+    if (!isCurrentSelection(submitSelectionSequence, submitPr)) return;
     setPreflight(next);
     dispatchWorkspace({ type: "prepare_publish_success", preflight: next });
     setDraftDirtySincePreflight(false);
@@ -478,24 +485,33 @@ export default function App() {
 
   async function confirmSubmit() {
     if (!selectedPr || !context || preflight?.status !== "ready" || !preflight.confirmation_id) return;
-    setSubmitting(true);
-    setSubmitMessage("Submitting review...");
+    const submitSelectionSequence = selectionSequenceRef.current;
+    const submitPr = selectedPr;
+    const submitContext = context;
+    const confirmationId = preflight.confirmation_id;
     try {
-      const validatedDraft = await validateActiveDraftInlineComments();
-      if (validatedDraft === undefined) return;
-      const payload = currentReviewPublishPayload(selectedPr, context, validatedDraft);
+      const validatedDraft = await validateActiveDraftInlineComments({
+        selectionSequence: submitSelectionSequence,
+        pr: submitPr,
+      });
+      if (validatedDraft === undefined || !isCurrentSelection(submitSelectionSequence, submitPr)) return;
+      setSubmitting(true);
+      setSubmitMessage("Submitting review...");
+      const payload = currentReviewPublishPayload(submitPr, submitContext, validatedDraft);
       const submitted = await confirmSubmitReview({
         payload,
-        confirmation_id: preflight.confirmation_id,
+        confirmation_id: confirmationId,
       });
+      if (!isCurrentSelection(submitSelectionSequence, submitPr)) return;
       setSubmittedReviewId(submitted.id);
-      setSubmittedRefs((current) => new Set(current).add(pullRequestRef(selectedPr)));
+      setSubmittedRefs((current) => new Set(current).add(pullRequestRef(submitPr)));
       setSubmitMessage(`Submitted review #${submitted.id}`);
       setPreflight(null);
     } catch (error) {
+      if (!isCurrentSelection(submitSelectionSequence, submitPr)) return;
       setSubmitMessage(error instanceof Error ? error.message : "submit_failed");
     } finally {
-      setSubmitting(false);
+      if (isCurrentSelection(submitSelectionSequence, submitPr)) setSubmitting(false);
     }
   }
 
@@ -576,7 +592,10 @@ export default function App() {
     setPreflight(null);
   }
 
-  async function validateActiveDraftInlineComments(): Promise<ReviewDraftView | null | undefined> {
+  async function validateActiveDraftInlineComments(expected?: {
+    selectionSequence: number;
+    pr: PullRequestQueueItem;
+  }): Promise<ReviewDraftView | null | undefined> {
     if (!activeDraft || !context) return activeDraft;
     try {
       const comments = await validateInlineComments({
@@ -584,14 +603,20 @@ export default function App() {
         files: context.files,
         diff_hash: context.diff_hash,
       });
+      if (expected && !isCurrentSelection(expected.selectionSequence, expected.pr)) return undefined;
       const nextDraft = { ...activeDraft, inline_comments: comments, updated_at: new Date().toISOString() };
       dispatchWorkspace({ type: "validate_inline_success", comments });
       persistDraft(nextDraft);
       return nextDraft;
     } catch (error) {
+      if (expected && !isCurrentSelection(expected.selectionSequence, expected.pr)) return undefined;
       setSubmitMessage(error instanceof Error ? error.message : "inline_validation_failed");
       return undefined;
     }
+  }
+
+  function isCurrentSelection(selectionSequence: number, pr: PullRequestQueueItem): boolean {
+    return selectionSequenceRef.current === selectionSequence && samePullRequest(selectedPrRef.current, pr);
   }
 
   function persistDraft(nextDraft: ReviewDraftView) {
