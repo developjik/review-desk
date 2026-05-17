@@ -59,6 +59,7 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         pendingRunIds: Array.from(new Set([...state.pendingRunIds, action.run.run_id])),
       };
     case "run_completed": {
+      if (!state.selectedPr || !runMatchesSelectedPr(action.run, state.selectedPr)) return state;
       const nextRuns = sortRuns(upsertRun(state.runs, action.run));
       const activeDraft = state.activeDraft?.user_edited ? state.activeDraft : action.draft ?? state.activeDraft;
       return {
@@ -117,4 +118,8 @@ function upsertRun(runs: AnalysisRunView[], nextRun: AnalysisRunView): AnalysisR
   const found = runs.some((run) => run.run_id === nextRun.run_id);
   if (!found) return [...runs, nextRun];
   return runs.map((run) => (run.run_id === nextRun.run_id ? nextRun : run));
+}
+
+function runMatchesSelectedPr(run: AnalysisRunView, selectedPr: PullRequestQueueItem): boolean {
+  return run.owner === selectedPr.owner && run.repo === selectedPr.repo && run.number === selectedPr.number;
 }

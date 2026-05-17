@@ -65,6 +65,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 export default function App() {
   const commandInputRef = useRef<HTMLInputElement>(null);
   const selectionSequenceRef = useRef(0);
+  const selectedPrRef = useRef<PullRequestQueueItem | null>(null);
   const [workspace, dispatchWorkspace] = useReducer(workspaceReducer, initialWorkspaceState);
   const [status, setStatus] = useState<AppStatusView>(sampleStatus());
   const [languagePreferences, setLanguagePreferences] = useState<LanguagePreferences>(
@@ -249,6 +250,7 @@ export default function App() {
     selectionSequenceRef.current = selectionSequence;
     const isLatestSelection = () => selectionSequenceRef.current === selectionSequence;
 
+    selectedPrRef.current = item;
     setSelectedPr(item);
     dispatchWorkspace({ type: "select_pr", pr: item });
     setContextState("loading");
@@ -406,18 +408,21 @@ export default function App() {
       setAgentMessage("Select a PR before running agents.");
       return;
     }
+    const runSelectionSequence = selectionSequenceRef.current;
+    const runPr = selectedPr;
+    const runContext = context;
     setAgentStatus("running");
     setAgentMessage(`Running ${mode} analysis with ${model} and ${reasoningDepth} reasoning in ${languagePreferences.review_locale}`);
     const result = await startAgentRun({
-      owner: selectedPr.owner,
-      repo: selectedPr.repo,
-      number: selectedPr.number,
-      files: context.files,
+      owner: runPr.owner,
+      repo: runPr.repo,
+      number: runPr.number,
+      files: runContext.files,
       model,
       reasoning_depth: reasoningDepth,
       reasoning_effort: reasoningDepth,
       review_language: languagePreferences.review_locale,
-      head_sha: context.pr.head_sha,
+      head_sha: runContext.pr.head_sha,
       private_diff_consent_required: true,
       private_diff_consent_accepted: privateConsent,
     }).catch((error: unknown) => ({
@@ -428,9 +433,10 @@ export default function App() {
       blocked_reason: "generation_failed",
       run: null,
     }));
+    if (selectionSequenceRef.current !== runSelectionSequence || !samePullRequest(selectedPrRef.current, runPr)) return;
     setAgentStatus(result.status);
     setAgentMessage(result.blocked_reason ?? result.disabled_reason ?? result.report_path ?? "Draft ready");
-    const completedRun = analysisRunFromAgentResult(result.run, selectedPr, context, mode, model, reasoningDepth, languagePreferences.review_locale, privateConsent, result.body);
+    const completedRun = analysisRunFromAgentResult(result.run, runPr, runContext, mode, model, reasoningDepth, languagePreferences.review_locale, privateConsent, result.body);
     const generatedDraft = result.body.trim() ? reviewDraftFromRun(completedRun, result.body, activeDraft?.verdict ?? verdict) : null;
     dispatchWorkspace({ type: "run_completed", run: completedRun, draft: generatedDraft });
     if (result.body.trim()) {
@@ -693,6 +699,10 @@ async function loadWorkspaceDraft(input: {
   number: number;
 }): Promise<ReviewDraftView | null> {
   return readReviewDraft({ ...input, draft_id: "active" }).catch(() => null);
+}
+
+function samePullRequest(left: PullRequestQueueItem | null, right: PullRequestQueueItem): boolean {
+  return left?.owner === right.owner && left.repo === right.repo && left.number === right.number;
 }
 
 function analysisRunFromAgentResult(

@@ -233,6 +233,37 @@ describe("ReviewDesk app shell", () => {
 
     await waitFor(() => expect(screen.queryByDisplayValue("First PR draft")).toBeNull());
   });
+
+  it("does not apply an agent run completion after switching PRs", async () => {
+    const queue = sampleQueue();
+    const runCompletion = deferred<Awaited<ReturnType<typeof ipc.startAgentRun>>>();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(aiReadyStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockImplementation((item) => Promise.resolve(sampleContext(item)));
+    vi.mocked(ipc.startAgentRun).mockReturnValue(runCompletion.promise);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Allow private diff analysis" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fast" }));
+    await waitFor(() => expect(ipc.startAgentRun).toHaveBeenCalled());
+
+    fireEvent.click(await findQueueItem("User hook refactor"));
+    await waitFor(() => expect(screen.getAllByText("company/admin#588").length).toBeGreaterThan(0));
+
+    runCompletion.resolve({
+      status: "draft_ready",
+      body: "Stale AI draft",
+      report_path: null,
+      disabled_reason: null,
+      blocked_reason: null,
+      run: null,
+    });
+
+    await waitFor(() => expect(screen.getAllByText("company/admin#588").length).toBeGreaterThan(0));
+    expect(screen.queryByDisplayValue("Stale AI draft")).toBeNull();
+  });
 });
 
 function aiReadyStatus(): ReturnType<typeof sampleConnectedStatus> {
