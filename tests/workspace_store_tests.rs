@@ -95,6 +95,56 @@ fn workspace_store_rejects_path_traversal_in_owner_repo_and_ids() {
     }
 }
 
+#[test]
+fn workspace_store_rejects_tampered_active_draft_id_on_read() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    store
+        .mark_active_draft(&key, "draft-a")
+        .expect("active draft");
+
+    std::fs::write(
+        temp.path()
+            .join(".reviewdesk/workspaces/company/payment-web/582/drafts/active.json"),
+        "\"../draft\"",
+    )
+    .expect("tamper active draft");
+
+    assert!(store.read_active_draft_id(&key).is_err());
+}
+
+#[test]
+fn workspace_store_rejects_artifacts_that_do_not_match_workspace_key() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+
+    let mut run = sample_run("run-a");
+    run.owner = "other-company".to_string();
+    assert!(store.save_run(&key, &run).is_err());
+
+    let mut run = sample_run("run-a");
+    run.repo = "other-repo".to_string();
+    assert!(store.save_run(&key, &run).is_err());
+
+    let mut run = sample_run("run-a");
+    run.number = 583;
+    assert!(store.save_run(&key, &run).is_err());
+
+    let mut draft = sample_draft("draft-a", "run-a");
+    draft.owner = "other-company".to_string();
+    assert!(store.save_draft(&key, &draft).is_err());
+
+    let mut draft = sample_draft("draft-a", "run-a");
+    draft.repo = "other-repo".to_string();
+    assert!(store.save_draft(&key, &draft).is_err());
+
+    let mut draft = sample_draft("draft-a", "run-a");
+    draft.number = 583;
+    assert!(store.save_draft(&key, &draft).is_err());
+}
+
 fn sample_run(run_id: &str) -> AnalysisRun {
     AnalysisRun {
         run_id: run_id.to_string(),

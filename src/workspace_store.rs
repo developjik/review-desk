@@ -41,6 +41,7 @@ impl WorkspaceStore {
 
     pub fn save_run(&self, key: &PrWorkspaceKey, run: &AnalysisRun) -> Result<PathBuf> {
         validate_segment("run_id", &run.run_id)?;
+        validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
         self.ensure_workspace_dirs(key)?;
         self.local.save_json(
             &format!("{}/runs/{}.json", key.base_relative(), run.run_id),
@@ -79,6 +80,7 @@ impl WorkspaceStore {
 
     pub fn save_draft(&self, key: &PrWorkspaceKey, draft: &ReviewDraft) -> Result<PathBuf> {
         validate_segment("draft_id", &draft.draft_id)?;
+        validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)?;
         self.ensure_workspace_dirs(key)?;
         self.local.save_json(
             &format!("{}/drafts/{}.json", key.base_relative(), draft.draft_id),
@@ -116,6 +118,7 @@ impl WorkspaceStore {
         let draft_id: String = self
             .local
             .load_json(&format!("{}/drafts/active.json", key.base_relative()))?;
+        validate_segment("draft_id", &draft_id)?;
         Ok(Some(draft_id))
     }
 
@@ -142,6 +145,15 @@ impl WorkspaceStore {
 
         Ok(())
     }
+}
+
+fn validate_pr_identity(key: &PrWorkspaceKey, owner: &str, repo: &str, number: u64) -> Result<()> {
+    if key.owner != owner || key.repo != repo || key.number != number {
+        return Err(ReviewDeskError::InvalidPath(format!(
+            "artifact PR identity does not match workspace key: {owner}/{repo}#{number}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_segment(label: &str, value: &str) -> Result<()> {
