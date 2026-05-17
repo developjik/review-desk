@@ -13,7 +13,14 @@ impl LocalStore {
         std::fs::create_dir_all(&root)?;
         set_owner_only_dir(&root)?;
 
-        for child in ["reviews", "drafts", "submissions", "state", "debug"] {
+        for child in [
+            "reviews",
+            "drafts",
+            "submissions",
+            "state",
+            "debug",
+            "workspaces",
+        ] {
             let path = root.join(child);
             std::fs::create_dir_all(&path)?;
             set_owner_only_dir(&path)?;

@@ -9,3 +9,4 @@ pub mod review;
 pub mod security;
 pub mod storage;
 pub mod ui;
+pub mod workspace_store;

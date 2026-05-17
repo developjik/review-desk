@@ -128,16 +128,20 @@ impl ReviewPipeline {
                 run.completed_at = Some(Utc::now());
 
                 let draft = ReviewDraft {
-                    id: format!("draft-{}", run.id),
-                    review_run_id: run.id.clone(),
-                    head_sha: run.head_sha.clone(),
+                    draft_id: format!("draft-{}", run.id),
+                    owner: run.owner.clone(),
+                    repo: run.repo.clone(),
+                    number: run.number,
+                    source_run_ids: vec![run.id.clone()],
+                    base_head_sha: run.head_sha.clone(),
+                    base_diff_hash: run.diff_hash.clone().unwrap_or_default(),
+                    verdict: output.suggested_event,
                     body: output.draft_body.clone(),
-                    event: output.suggested_event,
-                    status: "DRAFT_READY".to_string(),
-                    created_at: now,
-                    updated_at: now,
-                    submitted_at: None,
-                    github_review_id: None,
+                    inline_comments: vec![],
+                    user_edited: false,
+                    stale: false,
+                    created_at: now.to_rfc3339(),
+                    updated_at: now.to_rfc3339(),
                 };
                 Ok(PipelineResult {
                     status: ReviewRunStatus::DraftReady,
@@ -161,16 +165,20 @@ impl ReviewPipeline {
                 run.error = Some(reason.clone());
                 run.completed_at = Some(Utc::now());
                 let draft = ReviewDraft {
-                    id: format!("draft-{}", run.id),
-                    review_run_id: run.id.clone(),
-                    head_sha: run.head_sha.clone(),
+                    draft_id: format!("draft-{}", run.id),
+                    owner: run.owner.clone(),
+                    repo: run.repo.clone(),
+                    number: run.number,
+                    source_run_ids: vec![run.id.clone()],
+                    base_head_sha: run.head_sha.clone(),
+                    base_diff_hash: run.diff_hash.clone().unwrap_or_default(),
+                    verdict: ReviewEvent::Comment,
                     body: String::new(),
-                    event: ReviewEvent::Comment,
-                    status: "AI_BLOCKED_UNSUPPORTED_AUTH".to_string(),
-                    created_at: now,
-                    updated_at: now,
-                    submitted_at: None,
-                    github_review_id: None,
+                    inline_comments: vec![],
+                    user_edited: false,
+                    stale: false,
+                    created_at: now.to_rfc3339(),
+                    updated_at: now.to_rfc3339(),
                 };
                 Ok(PipelineResult {
                     status: ReviewRunStatus::AiBlockedUnsupportedAuth,

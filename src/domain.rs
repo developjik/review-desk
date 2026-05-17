@@ -1,3 +1,4 @@
+use crate::app_core::{AiBlockedReason, Locale, ReasoningEffort};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -187,20 +188,6 @@ pub struct ReviewFinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReviewDraft {
-    pub id: String,
-    pub review_run_id: String,
-    pub head_sha: String,
-    pub body: String,
-    pub event: ReviewEvent,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub submitted_at: Option<DateTime<Utc>>,
-    pub github_review_id: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubmittedReview {
     pub id: String,
     pub github_review_id: u64,
@@ -236,6 +223,131 @@ pub enum ReasoningDepth {
     Fast,
     Balanced,
     Deep,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisRunMode {
+    Fast,
+    Deep,
+    Security,
+    Tests,
+    Custom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisRunStatus {
+    Queued,
+    Running,
+    DraftReady,
+    Failed,
+    Cancelled,
+    Stale,
+    Archived,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnalysisRun {
+    pub run_id: String,
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub head_sha: String,
+    pub diff_hash: String,
+    pub context_hash: String,
+    pub mode: AnalysisRunMode,
+    pub model_id: String,
+    pub reasoning_effort: ReasoningEffort,
+    pub review_language: Locale,
+    pub custom_prompt: Option<String>,
+    pub prompt_version: String,
+    pub selected_files: Vec<String>,
+    pub excluded_files: Vec<String>,
+    pub private_diff_consent_snapshot: bool,
+    pub status: AnalysisRunStatus,
+    pub blocked_reason: Option<AiBlockedReason>,
+    pub draft_seed_body: Option<String>,
+    pub findings: Vec<ReviewFinding>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InlineMappingStatus {
+    Valid,
+    MissingPath,
+    InvalidSide,
+    InvalidLine,
+    StaleDiff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineCommentDraft {
+    pub id: String,
+    pub path: String,
+    pub side: String,
+    pub line: u64,
+    pub start_line: Option<u64>,
+    pub start_side: Option<String>,
+    pub body: String,
+    pub severity: Option<String>,
+    pub confidence: Option<u8>,
+    pub source_run_id: Option<String>,
+    pub source_finding_id: Option<String>,
+    pub selected_for_publish: bool,
+    pub dismissed: bool,
+    pub user_edited: bool,
+    pub mapping_status: InlineMappingStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewDraft {
+    pub draft_id: String,
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub source_run_ids: Vec<String>,
+    pub base_head_sha: String,
+    pub base_diff_hash: String,
+    pub verdict: ReviewEvent,
+    pub body: String,
+    pub inline_comments: Vec<InlineCommentDraft>,
+    pub user_edited: bool,
+    pub stale: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewPublishPayload {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub expected_head_sha: String,
+    pub expected_diff_hash: String,
+    pub event: ReviewEvent,
+    pub body: String,
+    pub inline_comments: Vec<InlineCommentDraft>,
+    pub explicit_verdict_confirmed: bool,
+    pub private_diff_consent_required: bool,
+    pub private_diff_consent_accepted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishAttempt {
+    pub attempt_id: String,
+    pub draft_id: Option<String>,
+    pub confirmation_id: String,
+    pub payload: ReviewPublishPayload,
+    pub github_account: Option<String>,
+    pub status: String,
+    pub github_review_id: Option<u64>,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub completed_at: Option<String>,
 }
 
 impl ReasoningDepth {
