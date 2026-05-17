@@ -65,6 +65,37 @@ fn workspace_store_groups_artifacts_by_pr_with_owner_only_permissions() {
 }
 
 #[test]
+fn workspace_store_updates_run_status_without_changing_run_identity() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let mut run = sample_run("run-a");
+    run.status = AnalysisRunStatus::Running;
+    run.completed_at = None;
+    store.save_run(&key, &run).expect("save run");
+
+    let updated = store
+        .update_run_status(
+            &key,
+            "run-a",
+            AnalysisRunStatus::Cancelled,
+            Some("done".to_string()),
+        )
+        .expect("update run");
+
+    assert_eq!(updated.run_id, "run-a");
+    assert_eq!(updated.owner, "company");
+    assert_eq!(updated.repo, "payment-web");
+    assert_eq!(updated.number, 582);
+    assert_eq!(updated.status, AnalysisRunStatus::Cancelled);
+    assert_eq!(updated.completed_at, Some("done".to_string()));
+    assert_eq!(
+        store.read_run(&key, "run-a").expect("read run").status,
+        AnalysisRunStatus::Cancelled
+    );
+}
+
+#[test]
 fn workspace_store_rejects_path_traversal_in_owner_repo_and_ids() {
     assert!(PrWorkspaceKey::new("../company", "payment-web", 582).is_err());
     assert!(PrWorkspaceKey::new("company", "../payment-web", 582).is_err());

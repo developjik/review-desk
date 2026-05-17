@@ -772,6 +772,31 @@ pub fn allowed_ipc_commands() -> &'static [IpcCommandSpec] {
             credential_exposure: false,
         },
         IpcCommandSpec {
+            name: "list_analysis_runs",
+            risk: CommandRisk::ReadOnly,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "start_analysis_run",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "read_analysis_run",
+            risk: CommandRisk::ReadOnly,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "cancel_analysis_run",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "archive_analysis_run",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
             name: "generate_review_draft",
             risk: CommandRisk::WritesLocal,
             credential_exposure: false,

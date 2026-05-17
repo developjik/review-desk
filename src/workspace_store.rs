@@ -1,4 +1,6 @@
-use crate::domain::{AnalysisRun, PublishAttempt, Result, ReviewDeskError, ReviewDraft};
+use crate::domain::{
+    AnalysisRun, AnalysisRunStatus, PublishAttempt, Result, ReviewDeskError, ReviewDraft,
+};
 use crate::storage::LocalStore;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -93,6 +95,34 @@ impl WorkspaceStore {
                 .then_with(|| left.run_id.cmp(&right.run_id))
         });
         Ok(runs)
+    }
+
+    pub fn read_run(&self, key: &PrWorkspaceKey, run_id: &str) -> Result<AnalysisRun> {
+        validate_segment("run_id", run_id)?;
+        let run: AnalysisRun =
+            self.local
+                .load_json(&format!("{}/runs/{}.json", key.base_relative(), run_id))?;
+        validate_run_identity(key, run_id, &run)?;
+        Ok(run)
+    }
+
+    pub fn update_run_status(
+        &self,
+        key: &PrWorkspaceKey,
+        run_id: &str,
+        status: AnalysisRunStatus,
+        completed_at: Option<String>,
+    ) -> Result<AnalysisRun> {
+        let mut run = self.read_run(key, run_id)?;
+        run.status = status;
+        if completed_at.is_some() {
+            run.completed_at = completed_at;
+        }
+        self.local.save_json(
+            &format!("{}/runs/{}.json", key.base_relative(), run.run_id),
+            &run,
+        )?;
+        Ok(run)
     }
 
     pub fn save_draft(&self, key: &PrWorkspaceKey, draft: &ReviewDraft) -> Result<PathBuf> {
@@ -254,6 +284,21 @@ fn validate_pr_identity(key: &PrWorkspaceKey, owner: &str, repo: &str, number: u
         )));
     }
     Ok(())
+}
+
+fn validate_run_identity(
+    key: &PrWorkspaceKey,
+    expected_run_id: &str,
+    run: &AnalysisRun,
+) -> Result<()> {
+    validate_segment("run_id", &run.run_id)?;
+    if run.run_id != expected_run_id {
+        return Err(ReviewDeskError::InvalidPath(format!(
+            "run identity does not match requested id: {} != {expected_run_id}",
+            run.run_id
+        )));
+    }
+    validate_pr_identity(key, &run.owner, &run.repo, run.number)
 }
 
 fn validate_draft_identity(

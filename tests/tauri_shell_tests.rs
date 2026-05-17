@@ -66,6 +66,26 @@ fn tauri_build_manifest_lists_the_same_safe_commands_as_app_core() {
 }
 
 #[test]
+fn tauri_allowlist_contains_run_draft_inline_publish_commands() {
+    let build_rs = fs::read_to_string("src-tauri/build.rs").expect("build.rs exists");
+    for command in [
+        "list_analysis_runs",
+        "start_analysis_run",
+        "read_analysis_run",
+        "cancel_analysis_run",
+        "archive_analysis_run",
+        "create_draft_from_run",
+        "save_review_draft",
+        "read_review_draft",
+        "list_review_drafts",
+        "mark_active_draft",
+        "validate_inline_comments",
+    ] {
+        assert!(build_rs.contains(command), "missing command {command}");
+    }
+}
+
+#[test]
 fn tauri_capability_allows_all_safe_reviewdesk_commands() {
     let capability =
         fs::read_to_string("src-tauri/capabilities/main.json").expect("capability exists");

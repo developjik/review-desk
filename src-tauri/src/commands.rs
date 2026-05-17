@@ -7,8 +7,9 @@ use reviewdesk::app_core::{
 use reviewdesk::auth::{KeyringTokenStore, TokenKind, TokenStore};
 use reviewdesk::codex_bridge::{CodexBridge, CodexBridgeStatusView, sanitize_codex_diagnostics};
 use reviewdesk::domain::{
-    ChangedFile, GitHubErrorKind, InlineCommentDraft, PublishAttempt, PullRequestQueueItem,
-    Repository, ReviewDeskError, ReviewDraft, ReviewEvent, ReviewPublishPayload,
+    AnalysisRun, AnalysisRunMode, AnalysisRunStatus, ChangedFile, GitHubErrorKind,
+    InlineCommentDraft, PublishAttempt, PullRequestQueueItem, Repository, ReviewDeskError,
+    ReviewDraft, ReviewEvent, ReviewPublishPayload,
 };
 use reviewdesk::github::{
     DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitComment, ReviewSubmitRequest,
@@ -1261,6 +1262,131 @@ pub struct ReadAgentRunRequest {
     pub run_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListAnalysisRunsRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct StartAnalysisRunRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub files: Vec<ChangedFile>,
+    pub mode: AnalysisRunMode,
+    pub model: String,
+    pub reasoning_effort: ReasoningEffort,
+    pub review_language: Locale,
+    pub head_sha: Option<String>,
+    pub diff_hash: Option<String>,
+    pub context_hash: Option<String>,
+    pub custom_prompt: Option<String>,
+    pub selected_files: Option<Vec<String>>,
+    pub excluded_files: Option<Vec<String>>,
+    pub private_diff_consent_required: bool,
+    pub private_diff_consent_accepted: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnalysisRunReferenceRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub run_id: String,
+}
+
+#[tauri::command]
+pub fn list_analysis_runs(request: ListAnalysisRunsRequest) -> CommandResult<Vec<AnalysisRun>> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    Ok(store.list_runs(&key)?)
+}
+
+#[tauri::command]
+pub fn start_analysis_run(request: StartAnalysisRunRequest) -> CommandResult<AnalysisRun> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(&request.owner, &request.repo, request.number)?;
+    let selected_files = request.selected_files.unwrap_or_else(|| {
+        request
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect::<Vec<_>>()
+    });
+    let diff_hash = request
+        .diff_hash
+        .unwrap_or_else(|| stable_changed_files_hash(&request.files));
+    let now = chrono::Utc::now().to_rfc3339();
+    let run = AnalysisRun {
+        run_id: reviewdesk::review::new_analysis_run_id(&request.owner, &request.repo, request.number),
+        owner: request.owner,
+        repo: request.repo,
+        number: request.number,
+        head_sha: request.head_sha.unwrap_or_default(),
+        diff_hash,
+        context_hash: request.context_hash.unwrap_or_default(),
+        mode: request.mode,
+        model_id: request.model,
+        reasoning_effort: request.reasoning_effort,
+        review_language: request.review_language,
+        custom_prompt: request.custom_prompt,
+        prompt_version: "reviewdesk-run-centric-v1".to_string(),
+        selected_files,
+        excluded_files: request.excluded_files.unwrap_or_default(),
+        private_diff_consent_snapshot: request.private_diff_consent_accepted,
+        status: AnalysisRunStatus::Queued,
+        blocked_reason: if request.private_diff_consent_required
+            && !request.private_diff_consent_accepted
+        {
+            Some(AiBlockedReason::PrivateDiffConsentRequired)
+        } else {
+            None
+        },
+        draft_seed_body: None,
+        findings: vec![],
+        created_at: now,
+        completed_at: None,
+    };
+    store.save_run(&key, &run)?;
+    Ok(run)
+}
+
+#[tauri::command]
+pub fn read_analysis_run(request: AnalysisRunReferenceRequest) -> CommandResult<AnalysisRun> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    Ok(store.read_run(&key, &request.run_id)?)
+}
+
+#[tauri::command]
+pub fn cancel_analysis_run(request: AnalysisRunReferenceRequest) -> CommandResult<AnalysisRun> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    let run = store.read_run(&key, &request.run_id)?;
+    if matches!(
+        run.status,
+        AnalysisRunStatus::Queued | AnalysisRunStatus::Running
+    ) {
+        Ok(store.update_run_status(
+            &key,
+            &request.run_id,
+            AnalysisRunStatus::Cancelled,
+            Some(chrono::Utc::now().to_rfc3339()),
+        )?)
+    } else {
+        Ok(run)
+    }
+}
+
+#[tauri::command]
+pub fn archive_analysis_run(request: AnalysisRunReferenceRequest) -> CommandResult<AnalysisRun> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    Ok(store.update_run_status(&key, &request.run_id, AnalysisRunStatus::Archived, None)?)
+}
+
 #[tauri::command]
 pub async fn generate_review_draft(
     request: GenerateReviewDraftRequest,
@@ -2113,7 +2239,9 @@ fn github_error_code(kind: GitHubErrorKind) -> &'static str {
 #[cfg(test)]
 mod active_draft_tests {
     use super::*;
-    use reviewdesk::domain::{InlineMappingStatus, ReviewEvent};
+    use reviewdesk::domain::{
+        AnalysisRunMode, AnalysisRunStatus, InlineMappingStatus, ReviewEvent,
+    };
     use std::sync::Mutex;
 
     static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
@@ -2143,6 +2271,70 @@ mod active_draft_tests {
         std::env::set_current_dir(original_dir).expect("restore dir");
         assert_eq!(active.draft_id, "draft-a");
         assert_eq!(active.body, "Active draft body");
+    }
+
+    #[test]
+    fn analysis_run_commands_persist_read_cancel_and_archive_runs() {
+        let _guard = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(temp.path()).expect("set temp dir");
+
+        let run = start_analysis_run(StartAnalysisRunRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            files: vec![ChangedFile::new("src/lib.rs", Some("@@ -1 +1"))],
+            mode: AnalysisRunMode::Fast,
+            model: "gpt-5.5".to_string(),
+            reasoning_effort: ReasoningEffort::Medium,
+            review_language: Locale::En,
+            head_sha: Some("head".to_string()),
+            diff_hash: Some("diff".to_string()),
+            context_hash: Some("context".to_string()),
+            custom_prompt: None,
+            selected_files: None,
+            excluded_files: None,
+            private_diff_consent_required: false,
+            private_diff_consent_accepted: true,
+        })
+        .expect("start analysis run");
+
+        let listed = list_analysis_runs(ListAnalysisRunsRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+        })
+        .expect("list analysis runs");
+        let read = read_analysis_run(AnalysisRunReferenceRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            run_id: run.run_id.clone(),
+        })
+        .expect("read analysis run");
+        let cancelled = cancel_analysis_run(AnalysisRunReferenceRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            run_id: run.run_id.clone(),
+        })
+        .expect("cancel analysis run");
+        let archived = archive_analysis_run(AnalysisRunReferenceRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            run_id: run.run_id.clone(),
+        })
+        .expect("archive analysis run");
+
+        std::env::set_current_dir(original_dir).expect("restore dir");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(read.run_id, run.run_id);
+        assert_eq!(read.status, AnalysisRunStatus::Queued);
+        assert_eq!(cancelled.status, AnalysisRunStatus::Cancelled);
+        assert!(cancelled.completed_at.is_some());
+        assert_eq!(archived.status, AnalysisRunStatus::Archived);
     }
 
     fn sample_review_draft(draft_id: &str, body: &str) -> ReviewDraft {

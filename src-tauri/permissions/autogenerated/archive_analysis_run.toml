@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-archive-analysis-run"
+description = "Enables the archive_analysis_run command without any pre-configured scope."
+commands.allow = ["archive_analysis_run"]
+
+[[permission]]
+identifier = "deny-archive-analysis-run"
+description = "Denies the archive_analysis_run command without any pre-configured scope."
+commands.deny = ["archive_analysis_run"]

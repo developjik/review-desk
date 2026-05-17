@@ -345,10 +345,22 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the archive_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-archive-analysis-run",
+          "markdownDescription": "Enables the archive_analysis_run command without any pre-configured scope."
+        },
+        {
           "description": "Enables the cancel_agent_run command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-agent-run",
           "markdownDescription": "Enables the cancel_agent_run command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-analysis-run",
+          "markdownDescription": "Enables the cancel_analysis_run command without any pre-configured scope."
         },
         {
           "description": "Enables the cancel_codex_chatgpt_login command without any pre-configured scope.",
@@ -409,6 +421,12 @@
           "type": "string",
           "const": "allow-list-ai-models",
           "markdownDescription": "Enables the list_ai_models command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_analysis_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-analysis-runs",
+          "markdownDescription": "Enables the list_analysis_runs command without any pre-configured scope."
         },
         {
           "description": "Enables the list_repositories command without any pre-configured scope.",
@@ -483,6 +501,12 @@
           "markdownDescription": "Enables the read_agent_run command without any pre-configured scope."
         },
         {
+          "description": "Enables the read_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-analysis-run",
+          "markdownDescription": "Enables the read_analysis_run command without any pre-configured scope."
+        },
+        {
           "description": "Enables the read_codex_account command without any pre-configured scope.",
           "type": "string",
           "const": "allow-read-codex-account",
@@ -543,6 +567,12 @@
           "markdownDescription": "Enables the start_agent_run command without any pre-configured scope."
         },
         {
+          "description": "Enables the start_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-analysis-run",
+          "markdownDescription": "Enables the start_analysis_run command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_chatgpt_oauth command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-chatgpt-oauth",
@@ -567,10 +597,22 @@
           "markdownDescription": "Enables the validate_inline_comments command without any pre-configured scope."
         },
         {
+          "description": "Denies the archive_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-archive-analysis-run",
+          "markdownDescription": "Denies the archive_analysis_run command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_agent_run command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-agent-run",
           "markdownDescription": "Denies the cancel_agent_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-analysis-run",
+          "markdownDescription": "Denies the cancel_analysis_run command without any pre-configured scope."
         },
         {
           "description": "Denies the cancel_codex_chatgpt_login command without any pre-configured scope.",
@@ -631,6 +673,12 @@
           "type": "string",
           "const": "deny-list-ai-models",
           "markdownDescription": "Denies the list_ai_models command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_analysis_runs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-analysis-runs",
+          "markdownDescription": "Denies the list_analysis_runs command without any pre-configured scope."
         },
         {
           "description": "Denies the list_repositories command without any pre-configured scope.",
@@ -705,6 +753,12 @@
           "markdownDescription": "Denies the read_agent_run command without any pre-configured scope."
         },
         {
+          "description": "Denies the read_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-analysis-run",
+          "markdownDescription": "Denies the read_analysis_run command without any pre-configured scope."
+        },
+        {
           "description": "Denies the read_codex_account command without any pre-configured scope.",
           "type": "string",
           "const": "deny-read-codex-account",
@@ -763,6 +817,12 @@
           "type": "string",
           "const": "deny-start-agent-run",
           "markdownDescription": "Denies the start_agent_run command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_analysis_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-analysis-run",
+          "markdownDescription": "Denies the start_analysis_run command without any pre-configured scope."
         },
         {
           "description": "Denies the start_chatgpt_oauth command without any pre-configured scope.",
