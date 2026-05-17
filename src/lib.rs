@@ -5,6 +5,8 @@ pub mod auth;
 pub mod codex_bridge;
 pub mod domain;
 pub mod github;
+pub mod inline_comments;
+pub mod publish;
 pub mod review;
 pub mod security;
 pub mod storage;

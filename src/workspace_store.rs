@@ -43,10 +43,14 @@ impl WorkspaceStore {
         validate_segment("run_id", &run.run_id)?;
         validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
         self.ensure_workspace_dirs(key)?;
-        self.local.save_json(
-            &format!("{}/runs/{}.json", key.base_relative(), run.run_id),
-            run,
-        )
+        let relative = format!("{}/runs/{}.json", key.base_relative(), run.run_id);
+        if self.local.root().join(&relative).exists() {
+            return Err(ReviewDeskError::InvalidPath(format!(
+                "run already exists: {}",
+                run.run_id
+            )));
+        }
+        self.local.save_json(&relative, run)
     }
 
     pub fn list_runs(&self, key: &PrWorkspaceKey) -> Result<Vec<AnalysisRun>> {
@@ -72,8 +76,11 @@ impl WorkspaceStore {
                     .file_name()
                     .and_then(|value| value.to_str())
                     .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
-                self.local
-                    .load_json(&format!("{}/runs/{}", key.base_relative(), file_name))
+                let run: AnalysisRun =
+                    self.local
+                        .load_json(&format!("{}/runs/{}", key.base_relative(), file_name))?;
+                validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
+                Ok(run)
             })
             .collect()
     }
@@ -90,8 +97,11 @@ impl WorkspaceStore {
 
     pub fn read_draft(&self, key: &PrWorkspaceKey, draft_id: &str) -> Result<ReviewDraft> {
         validate_segment("draft_id", draft_id)?;
-        self.local
-            .load_json(&format!("{}/drafts/{}.json", key.base_relative(), draft_id))
+        let draft: ReviewDraft =
+            self.local
+                .load_json(&format!("{}/drafts/{}.json", key.base_relative(), draft_id))?;
+        validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)?;
+        Ok(draft)
     }
 
     pub fn mark_active_draft(&self, key: &PrWorkspaceKey, draft_id: &str) -> Result<PathBuf> {

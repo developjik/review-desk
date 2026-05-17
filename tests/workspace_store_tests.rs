@@ -145,6 +145,65 @@ fn workspace_store_rejects_artifacts_that_do_not_match_workspace_key() {
     assert!(store.save_draft(&key, &draft).is_err());
 }
 
+#[test]
+fn workspace_store_rejects_duplicate_run_id_without_overwriting() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let original = sample_run("run-a");
+    let mut duplicate = sample_run("run-a");
+    duplicate.model_id = "different-model".to_string();
+
+    store.save_run(&key, &original).expect("save original run");
+
+    assert!(store.save_run(&key, &duplicate).is_err());
+    let runs = store.list_runs(&key).expect("runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].model_id, "gpt-5.5");
+}
+
+#[test]
+fn workspace_store_rejects_tampered_loaded_runs_that_do_not_match_workspace_key() {
+    for (field, value) in [
+        ("owner", serde_json::json!("other-company")),
+        ("repo", serde_json::json!("other-repo")),
+        ("number", serde_json::json!(583)),
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = WorkspaceStore::init(temp.path()).expect("store");
+        let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+        let run = sample_run("run-a");
+        let run_path = store.save_run(&key, &run).expect("save run");
+        tamper_json_field(&run_path, field, value);
+
+        assert!(
+            store.list_runs(&key).is_err(),
+            "tampered run {field} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn workspace_store_rejects_tampered_loaded_drafts_that_do_not_match_workspace_key() {
+    for (field, value) in [
+        ("owner", serde_json::json!("other-company")),
+        ("repo", serde_json::json!("other-repo")),
+        ("number", serde_json::json!(583)),
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = WorkspaceStore::init(temp.path()).expect("store");
+        let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+        let draft = sample_draft("draft-a", "run-a");
+        let draft_path = store.save_draft(&key, &draft).expect("save draft");
+        tamper_json_field(&draft_path, field, value);
+
+        assert!(
+            store.read_draft(&key, "draft-a").is_err(),
+            "tampered draft {field} should be rejected"
+        );
+    }
+}
+
 fn sample_run(run_id: &str) -> AnalysisRun {
     AnalysisRun {
         run_id: run_id.to_string(),
@@ -189,6 +248,17 @@ fn sample_draft(draft_id: &str, run_id: &str) -> ReviewDraft {
         created_at: "2026-05-17T00:00:00Z".to_string(),
         updated_at: "2026-05-17T00:00:02Z".to_string(),
     }
+}
+
+fn tamper_json_field(path: impl AsRef<Path>, field: &str, value: serde_json::Value) {
+    let data = std::fs::read(path.as_ref()).expect("read json");
+    let mut json: serde_json::Value = serde_json::from_slice(&data).expect("parse json");
+    json[field] = value;
+    std::fs::write(
+        path.as_ref(),
+        serde_json::to_vec_pretty(&json).expect("serialize json"),
+    )
+    .expect("write tampered json");
 }
 
 #[cfg(unix)]
