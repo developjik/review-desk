@@ -239,14 +239,16 @@ pub fn new_analysis_run_id(owner: &str, repo: &str, number: u64) -> String {
         .timestamp_nanos_opt()
         .map_or_else(|| now.timestamp_micros() * 1_000, |value| value);
     let counter = ANALYSIS_RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let entropy = run_id_entropy(owner, repo, number, timestamp, counter);
 
     format!(
-        "run-{}-{}-{}-{}-{}",
+        "run-{}-{}-{}-{}-{}-{}",
         safe_id_segment(owner),
         safe_id_segment(repo),
         number,
         timestamp,
-        counter
+        counter,
+        entropy
     )
 }
 
@@ -293,4 +295,23 @@ fn safe_id_segment(value: &str) -> String {
     } else {
         segment
     }
+}
+
+fn run_id_entropy(owner: &str, repo: &str, number: u64, timestamp: i64, counter: u64) -> String {
+    let mut bytes = [0_u8; 8];
+    if getrandom::fill(&mut bytes).is_ok() {
+        return format!("{:016x}", u64::from_be_bytes(bytes));
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(owner.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(repo.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(number.to_be_bytes());
+    hasher.update(timestamp.to_be_bytes());
+    hasher.update(counter.to_be_bytes());
+    hasher.update(std::process::id().to_be_bytes());
+    hasher.update(format!("{:?}", std::thread::current().id()).as_bytes());
+    format!("{:x}", hasher.finalize())[..16].to_string()
 }

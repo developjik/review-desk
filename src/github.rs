@@ -2,6 +2,7 @@ use crate::domain::{
     ChangedFile, GitHubErrorKind, PullRequestQueueItem, PullRequestSnapshot, Repository, Result,
     ReviewDeskError, ReviewEvent,
 };
+use crate::review::stable_changed_files_hash;
 use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, LINK, RETRY_AFTER};
 use serde::de::DeserializeOwned;
@@ -1106,7 +1107,7 @@ impl PullRequestContextView {
             "missing"
         }
         .to_string();
-        let diff_hash = diff_hash_for_files(&context.files);
+        let diff_hash = stable_changed_files_hash(&context.files);
         let ci = rollup_ci(&context.check_runs, &context.commit_status);
         let warnings = if ci.state == CiRollupState::Unknown {
             vec![ContextWarning::CiUnavailable]
@@ -1272,21 +1273,6 @@ fn highest_priority_ci_state(states: &[CiRollupState]) -> CiRollupState {
         }
     }
     CiRollupState::Unknown
-}
-
-fn diff_hash_for_files(files: &[ChangedFile]) -> String {
-    let mut entries = files
-        .iter()
-        .map(|file| {
-            format!(
-                "{}\n{}\n",
-                file.path,
-                file.patch.as_deref().unwrap_or("<patch_unavailable>")
-            )
-        })
-        .collect::<Vec<_>>();
-    entries.sort();
-    sha256_hex(entries.join("\n").as_bytes())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

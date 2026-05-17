@@ -1,6 +1,6 @@
 use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
-use reviewdesk::domain::ReviewEvent;
+use reviewdesk::domain::{ChangedFile, ReviewEvent};
 use reviewdesk::github::{
     CiRollupState, DevicePoll, GitHubClient, ReviewSubmitRequest, StaleCheckInput, StaleStatus,
     assigned_query, build_github_authorize_url, parse_pr_reference, pkce_challenge_s256,
@@ -486,6 +486,15 @@ async fn collects_pull_snapshot_and_related_context() {
     assert_eq!(context.files[0].patch_coverage, "available");
     assert_eq!(context.ci.state, CiRollupState::Success);
     assert_eq!(context.patch_coverage, "complete");
+    let changed_files = context
+        .files
+        .iter()
+        .map(|file| ChangedFile::new(file.path.clone(), file.patch.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        context.diff_hash,
+        reviewdesk::review::stable_changed_files_hash(&changed_files)
+    );
     assert!(!context.diff_hash.is_empty());
     assert!(!context.context_hash.is_empty());
 }
