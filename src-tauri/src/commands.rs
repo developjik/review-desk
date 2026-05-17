@@ -19,7 +19,6 @@ use reviewdesk::review::{ReviewPipeline, build_review_input};
 use reviewdesk::security::PrivateDiffConsent;
 use reviewdesk::storage::LocalStore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
 use std::sync::{Arc, Mutex};
@@ -1252,16 +1251,12 @@ async fn run_agent_review(
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
     let head_sha = request.head_sha.clone().unwrap_or_default();
-    let diff_hash = changed_files_hash(&request.files);
+    let run_id =
+        reviewdesk::review::new_analysis_run_id(&request.owner, &request.repo, request.number);
+    let diff_hash = reviewdesk::review::stable_changed_files_hash(&request.files);
     let rate_limit = codex_rate_limit_snapshot().await;
     let mut run = AgentRunRecordView {
-        run_id: format!(
-            "run-{}-{}-{}-{}",
-            safe_slug(&request.owner),
-            safe_slug(&request.repo),
-            request.number,
-            &diff_hash[..12]
-        ),
+        run_id,
         pull_request_id: format!("{}/{}#{}", request.owner, request.repo, request.number),
         repo_full_name: format!("{}/{}", request.owner, request.repo),
         pull_number: request.number,
@@ -1622,17 +1617,6 @@ fn parse_reasoning_effort(value: &str) -> CommandResult<ReasoningEffort> {
             format!("Unsupported reasoning effort: {other}"),
         )),
     }
-}
-
-fn changed_files_hash(files: &[ChangedFile]) -> String {
-    let mut hasher = Sha256::new();
-    for file in files {
-        hasher.update(file.path.as_bytes());
-        if let Some(patch) = &file.patch {
-            hasher.update(patch.as_bytes());
-        }
-    }
-    format!("{:x}", hasher.finalize())
 }
 
 fn blocked_generated_draft(

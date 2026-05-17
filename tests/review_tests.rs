@@ -1,6 +1,9 @@
 use reviewdesk::ai::{AiProvider, BlockedAiProvider, MockAiProvider};
 use reviewdesk::domain::{AiProviderStatus, ChangedFile, ReviewRunStatus};
-use reviewdesk::review::{ReviewPipeline, build_review_input, filter_changed_files};
+use reviewdesk::review::{
+    ReviewPipeline, build_review_input, filter_changed_files, new_analysis_run_id,
+    stable_changed_files_hash,
+};
 
 #[tokio::test]
 async fn blocked_ai_provider_returns_blocked_status() {
@@ -25,6 +28,33 @@ fn filters_generated_and_lock_files_from_review_input() {
     assert_eq!(filtered.included.len(), 1);
     assert_eq!(filtered.excluded.len(), 2);
     assert_eq!(filtered.included[0].path, "src/lib.rs");
+}
+
+#[test]
+fn analysis_run_ids_are_unique_for_same_pr_and_diff() {
+    let first = new_analysis_run_id("company", "payment-web", 582);
+    let second = new_analysis_run_id("company", "payment-web", 582);
+
+    assert_ne!(first, second);
+    assert!(first.starts_with("run-company-payment-web-582-"));
+    assert!(second.starts_with("run-company-payment-web-582-"));
+}
+
+#[test]
+fn changed_files_hash_is_stable_for_file_order() {
+    let left = vec![
+        ChangedFile::new("b.rs", Some("@@ b")),
+        ChangedFile::new("a.rs", Some("@@ a")),
+    ];
+    let right = vec![
+        ChangedFile::new("a.rs", Some("@@ a")),
+        ChangedFile::new("b.rs", Some("@@ b")),
+    ];
+
+    assert_eq!(
+        stable_changed_files_hash(&left),
+        stable_changed_files_hash(&right)
+    );
 }
 
 #[tokio::test]

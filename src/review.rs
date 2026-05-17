@@ -3,6 +3,9 @@ use crate::domain::{ChangedFile, Result, ReviewDraft, ReviewEvent, ReviewRun, Re
 use chrono::Utc;
 use globset::{Glob, GlobSetBuilder};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ANALYSIS_RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewInput {
@@ -97,7 +100,7 @@ impl ReviewPipeline {
     ) -> Result<PipelineResult> {
         let now = Utc::now();
         let (owner, repo, number) = parse_pr_ref(&input.pr_ref);
-        let run_id = stable_id(&input.pr_ref);
+        let run_id = new_analysis_run_id(&owner, &repo, number);
         let mut run = ReviewRun {
             id: run_id.clone(),
             owner,
@@ -105,7 +108,7 @@ impl ReviewPipeline {
             number,
             snapshot_id: None,
             head_sha: String::new(),
-            diff_hash: Some(diff_hash(&input.files)),
+            diff_hash: Some(stable_changed_files_hash(&input.files)),
             status: ReviewRunStatus::Analyzing,
             risk_level: None,
             suggested_verdict: None,
@@ -230,19 +233,64 @@ fn parse_pr_ref(pr_ref: &str) -> (String, String, u64) {
     (owner, repo, number)
 }
 
-fn stable_id(value: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())[..16].to_string()
+pub fn new_analysis_run_id(owner: &str, repo: &str, number: u64) -> String {
+    let now = Utc::now();
+    let timestamp = now
+        .timestamp_nanos_opt()
+        .map_or_else(|| now.timestamp_micros() * 1_000, |value| value);
+    let counter = ANALYSIS_RUN_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    format!(
+        "run-{}-{}-{}-{}-{}",
+        safe_id_segment(owner),
+        safe_id_segment(repo),
+        number,
+        timestamp,
+        counter
+    )
 }
 
-fn diff_hash(files: &[ChangedFile]) -> String {
+pub fn stable_changed_files_hash(files: &[ChangedFile]) -> String {
     let mut hasher = Sha256::new();
-    for file in files {
+    let mut ordered_files = files.iter().collect::<Vec<_>>();
+    ordered_files.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.patch.cmp(&right.patch))
+    });
+
+    for file in ordered_files {
+        hasher.update(b"file\0path\0");
+        hasher.update((file.path.len() as u64).to_be_bytes());
         hasher.update(file.path.as_bytes());
-        if let Some(patch) = &file.patch {
-            hasher.update(patch.as_bytes());
+        hasher.update(b"\0patch\0");
+        match &file.patch {
+            Some(patch) => {
+                hasher.update(b"some\0");
+                hasher.update((patch.len() as u64).to_be_bytes());
+                hasher.update(patch.as_bytes());
+            }
+            None => hasher.update(b"none\0"),
         }
     }
     format!("{:x}", hasher.finalize())
+}
+
+fn safe_id_segment(value: &str) -> String {
+    let segment = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    if segment.is_empty() {
+        "unknown".to_string()
+    } else {
+        segment
+    }
 }
