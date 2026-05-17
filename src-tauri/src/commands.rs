@@ -1,23 +1,25 @@
 use reviewdesk::app_core::{
     AgentRunRecordView, AiBlockedReason, AiConnectionStatus, AiConnectionStatusView,
     AiModelView, AiRateLimitSnapshot, AiRateLimitStatus, AppStatusContext, AppStatusView, Locale,
-    ReasoningEffort,
-    SubmitPreflightInput, SubmitPreflightView, frontend_safe_app_status_from_context,
-    prepare_submit_review as prepare_submit_review_core, validate_ai_run_configuration,
+    ReasoningEffort, frontend_safe_app_status_from_context, validate_ai_run_configuration,
     validate_external_url,
 };
 use reviewdesk::auth::{KeyringTokenStore, TokenKind, TokenStore};
 use reviewdesk::codex_bridge::{CodexBridge, CodexBridgeStatusView, sanitize_codex_diagnostics};
 use reviewdesk::domain::{
-    ChangedFile, GitHubErrorKind, InlineCommentDraft, PullRequestQueueItem, Repository,
-    ReviewDeskError, ReviewDraft, ReviewEvent,
+    ChangedFile, GitHubErrorKind, InlineCommentDraft, InlineMappingStatus, PublishAttempt,
+    PullRequestQueueItem, Repository, ReviewDeskError, ReviewDraft, ReviewEvent,
+    ReviewPublishPayload,
 };
 use reviewdesk::github::{
-    DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitRequest, SubmittedReviewResponse,
-    build_github_authorize_url, pkce_challenge_s256,
+    DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitComment, ReviewSubmitRequest,
+    SubmittedReviewResponse, build_github_authorize_url, pkce_challenge_s256,
 };
 use reviewdesk::inline_comments::validate_inline_comments as validate_inline_comments_core;
-use reviewdesk::review::{ReviewPipeline, build_review_input};
+use reviewdesk::publish::{
+    PreparedReviewPublishStatus, PreparedReviewPublishView, prepare_review_publish,
+};
+use reviewdesk::review::{ReviewPipeline, build_review_input, stable_changed_files_hash};
 use reviewdesk::security::PrivateDiffConsent;
 use reviewdesk::storage::LocalStore;
 use reviewdesk::workspace_store::{PrWorkspaceKey, WorkspaceStore};
@@ -1528,9 +1530,30 @@ pub fn save_draft(request: SaveDraftRequest) -> CommandResult<String> {
     Ok(path.display().to_string())
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct PrepareSubmitReviewRequest {
+    pub payload: ReviewPublishPayload,
+    pub github_connected: bool,
+    pub write_scope_valid: bool,
+    pub sso_required: bool,
+    pub pr_open: bool,
+    pub pr_merged: bool,
+    pub current_head_sha: String,
+    pub current_diff_hash: String,
+}
+
 #[tauri::command]
-pub fn prepare_submit_review(request: SubmitPreflightInput) -> SubmitPreflightView {
-    prepare_submit_review_core(request)
+pub fn prepare_submit_review(request: PrepareSubmitReviewRequest) -> PreparedReviewPublishView {
+    prepare_review_publish(
+        request.payload,
+        request.github_connected,
+        request.write_scope_valid,
+        request.sso_required,
+        request.pr_open,
+        request.pr_merged,
+        &request.current_head_sha,
+        &request.current_diff_hash,
+    )
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1553,13 +1576,7 @@ pub fn validate_inline_comments(
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConfirmSubmitReviewRequest {
-    pub owner: String,
-    pub repo: String,
-    pub number: u64,
-    pub expected_head_sha: String,
-    pub body: String,
-    pub event: ReviewEvent,
-    pub explicit_verdict_confirmed: bool,
+    pub payload: ReviewPublishPayload,
     pub confirmation_id: String,
 }
 
@@ -1573,58 +1590,226 @@ pub struct SubmittedReviewView {
 pub async fn confirm_submit_review(
     request: ConfirmSubmitReviewRequest,
 ) -> CommandResult<SubmittedReviewView> {
-    if request.confirmation_id.trim().is_empty() {
-        return Err(CommandError::new(
-            "confirmation_required",
-            "Submit confirmation id is required.",
-        ));
-    }
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(
+        request.payload.owner.clone(),
+        request.payload.repo.clone(),
+        request.payload.number,
+    )?;
 
-    let client = github_client_from_keychain()?;
+    let client = match github_client_from_keychain() {
+        Ok(client) => client,
+        Err(error) => {
+            record_failed_publish_attempt(
+                &store,
+                &key,
+                &request.payload,
+                &request.confirmation_id,
+                &error,
+            );
+            return Err(error);
+        }
+    };
     let snapshot = client
-        .pull_request_snapshot(&request.owner, &request.repo, request.number)
-        .await?;
-    let preflight = prepare_submit_review_core(SubmitPreflightInput {
-        github_connected: true,
-        write_scope_valid: true,
-        sso_required: false,
-        pr_open: snapshot.state == "open",
-        pr_merged: snapshot.merged,
-        expected_head_sha: request.expected_head_sha.clone(),
-        current_head_sha: snapshot.head_sha.clone(),
-        draft_body: request.body.clone(),
-        event: request.event,
-        explicit_verdict_confirmed: request.explicit_verdict_confirmed,
-        private_diff_consent_required: false,
-        private_diff_consent_accepted: false,
-    });
+        .pull_request_snapshot(
+            &request.payload.owner,
+            &request.payload.repo,
+            request.payload.number,
+        )
+        .await
+        .map_err(|error| {
+            record_publish_error(&store, &key, &request.payload, &request.confirmation_id, error)
+        })?;
+    let pull_files = client
+        .list_pull_files(
+            &request.payload.owner,
+            &request.payload.repo,
+            request.payload.number,
+        )
+        .await
+        .map_err(|error| {
+            record_publish_error(&store, &key, &request.payload, &request.confirmation_id, error)
+        })?;
+    let changed_files = pull_files
+        .into_iter()
+        .map(|file| ChangedFile {
+            path: file.filename,
+            patch: file.patch,
+        })
+        .collect::<Vec<_>>();
+    let current_diff_hash = stable_changed_files_hash(&changed_files);
+    let preflight = prepare_review_publish(
+        request.payload.clone(),
+        true,
+        true,
+        false,
+        snapshot.state == "open",
+        snapshot.merged,
+        &snapshot.head_sha,
+        &current_diff_hash,
+    );
+    if preflight.status == PreparedReviewPublishStatus::Blocked {
+        let code = preflight
+            .blocked_reasons
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "publish_blocked".to_string());
+        let error = CommandError::new(code, "Submit preflight is blocked.");
+        record_failed_publish_attempt(
+            &store,
+            &key,
+            &request.payload,
+            &request.confirmation_id,
+            &error,
+        );
+        return Err(error);
+    }
     if preflight.confirmation_id.as_deref() != Some(request.confirmation_id.as_str()) {
-        return Err(CommandError::new(
+        let error = CommandError::new(
             "confirmation_mismatch",
-            "Submit preflight must be prepared again for the current draft and head SHA.",
-        ));
+            "Submit preflight must be prepared again for the current draft, head SHA, and diff.",
+        );
+        record_failed_publish_attempt(
+            &store,
+            &key,
+            &request.payload,
+            &request.confirmation_id,
+            &error,
+        );
+        return Err(error);
     }
 
-    let response: SubmittedReviewResponse = client
+    let comments = request
+        .payload
+        .inline_comments
+        .iter()
+        .filter(|comment| {
+            comment.selected_for_publish
+                && !comment.dismissed
+                && comment.mapping_status == InlineMappingStatus::Valid
+                && !comment.body.trim().is_empty()
+        })
+        .map(|comment| ReviewSubmitComment {
+            path: comment.path.clone(),
+            side: comment.side.clone(),
+            line: comment.line,
+            start_line: comment.start_line,
+            start_side: comment.start_side.clone(),
+            body: comment.body.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let submit_request = ReviewSubmitRequest {
+        commit_id: snapshot.head_sha.clone(),
+        event: request.payload.event,
+        body: request.payload.body.clone(),
+        comments,
+    };
+
+    let response: SubmittedReviewResponse = match client
         .submit_review(
-            &request.owner,
-            &request.repo,
-            request.number,
-            &ReviewSubmitRequest {
-                commit_id: snapshot.head_sha,
-                event: request.event,
-                body: request.body,
-            },
+            &request.payload.owner,
+            &request.payload.repo,
+            request.payload.number,
+            &submit_request,
         )
-        .await?;
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let error = record_publish_error(
+                &store,
+                &key,
+                &request.payload,
+                &request.confirmation_id,
+                error,
+            );
+            return Err(error);
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    save_publish_attempt(
+        &store,
+        &key,
+        PublishAttempt {
+            attempt_id: new_publish_attempt_id()?,
+            draft_id: None,
+            confirmation_id: request.confirmation_id.clone(),
+            payload: request.payload.clone(),
+            github_account: None,
+            status: "succeeded".to_string(),
+            github_review_id: Some(response.id),
+            error_code: None,
+            error_message: None,
+            created_at: now.clone(),
+            completed_at: Some(now),
+        },
+    )?;
 
     Ok(SubmittedReviewView {
         id: response.id,
         url: format!(
             "https://github.com/{}/{}/pull/{}#pullrequestreview-{}",
-            request.owner, request.repo, request.number, response.id
+            request.payload.owner, request.payload.repo, request.payload.number, response.id
         ),
     })
+}
+
+fn record_publish_error(
+    store: &WorkspaceStore,
+    key: &PrWorkspaceKey,
+    payload: &ReviewPublishPayload,
+    confirmation_id: &str,
+    error: ReviewDeskError,
+) -> CommandError {
+    let command_error = CommandError::from(error);
+    record_failed_publish_attempt(store, key, payload, confirmation_id, &command_error);
+    command_error
+}
+
+fn record_failed_publish_attempt(
+    store: &WorkspaceStore,
+    key: &PrWorkspaceKey,
+    payload: &ReviewPublishPayload,
+    confirmation_id: &str,
+    error: &CommandError,
+) {
+    let Ok(attempt_id) = new_publish_attempt_id() else {
+        return;
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let attempt = PublishAttempt {
+        attempt_id,
+        draft_id: None,
+        confirmation_id: confirmation_id.to_string(),
+        payload: payload.clone(),
+        github_account: None,
+        status: "failed".to_string(),
+        github_review_id: None,
+        error_code: Some(error.code.clone()),
+        error_message: Some(error.message.clone()),
+        created_at: now.clone(),
+        completed_at: Some(now),
+    };
+    let _ = store.save_publish_attempt(key, &attempt);
+}
+
+fn save_publish_attempt(
+    store: &WorkspaceStore,
+    key: &PrWorkspaceKey,
+    attempt: PublishAttempt,
+) -> CommandResult<()> {
+    store.save_publish_attempt(key, &attempt)?;
+    Ok(())
+}
+
+fn new_publish_attempt_id() -> CommandResult<String> {
+    let now = chrono::Utc::now();
+    let timestamp = now
+        .timestamp_nanos_opt()
+        .map_or_else(|| now.timestamp_micros() * 1_000, |value| value);
+    Ok(format!("publish-{timestamp}-{}", random_hex(8)?))
 }
 
 #[derive(Debug, Clone, Deserialize)]

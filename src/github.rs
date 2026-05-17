@@ -867,6 +867,20 @@ pub struct ReviewSubmitRequest {
     pub commit_id: String,
     pub event: ReviewEvent,
     pub body: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<ReviewSubmitComment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewSubmitComment {
+    pub path: String,
+    pub side: String,
+    pub line: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_side: Option<String>,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

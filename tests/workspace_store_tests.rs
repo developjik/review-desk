@@ -1,6 +1,7 @@
 use reviewdesk::app_core::{Locale, ReasoningEffort};
 use reviewdesk::domain::{
-    AnalysisRun, AnalysisRunMode, AnalysisRunStatus, ReviewDraft, ReviewEvent,
+    AnalysisRun, AnalysisRunMode, AnalysisRunStatus, PublishAttempt, ReviewDraft, ReviewEvent,
+    ReviewPublishPayload,
 };
 use reviewdesk::workspace_store::{PrWorkspaceKey, WorkspaceStore};
 use std::path::{Path, PathBuf};
@@ -247,6 +248,27 @@ fn workspace_store_rejects_duplicate_run_id_without_overwriting() {
     assert_eq!(runs[0].model_id, "gpt-5.5");
 }
 
+#[test]
+fn workspace_store_saves_publish_attempt_append_first_under_pr_workspace() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let attempt = sample_publish_attempt("attempt-a");
+
+    let path = store
+        .save_publish_attempt(&key, &attempt)
+        .expect("save publish attempt");
+
+    assert!(path.ends_with(
+        ".reviewdesk/workspaces/company/payment-web/582/publish_attempts/attempt-a.json"
+    ));
+    assert!(store.save_publish_attempt(&key, &attempt).is_err());
+
+    let mut wrong_pr = sample_publish_attempt("attempt-b");
+    wrong_pr.payload.number = 583;
+    assert!(store.save_publish_attempt(&key, &wrong_pr).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn workspace_store_rejects_existing_run_path_atomically_without_following_symlink() {
@@ -425,6 +447,34 @@ fn sample_draft(draft_id: &str, run_id: &str) -> ReviewDraft {
         stale: false,
         created_at: "2026-05-17T00:00:00Z".to_string(),
         updated_at: "2026-05-17T00:00:02Z".to_string(),
+    }
+}
+
+fn sample_publish_attempt(attempt_id: &str) -> PublishAttempt {
+    PublishAttempt {
+        attempt_id: attempt_id.to_string(),
+        draft_id: None,
+        confirmation_id: "confirmation".to_string(),
+        payload: ReviewPublishPayload {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            expected_head_sha: "head".to_string(),
+            expected_diff_hash: "diff".to_string(),
+            event: ReviewEvent::Comment,
+            body: "Looks good.".to_string(),
+            inline_comments: vec![],
+            explicit_verdict_confirmed: false,
+            private_diff_consent_required: false,
+            private_diff_consent_accepted: false,
+        },
+        github_account: Some("developjik".to_string()),
+        status: "succeeded".to_string(),
+        github_review_id: Some(99),
+        error_code: None,
+        error_message: None,
+        created_at: "2026-05-17T00:00:00Z".to_string(),
+        completed_at: Some("2026-05-17T00:00:01Z".to_string()),
     }
 }
 

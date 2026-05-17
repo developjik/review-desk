@@ -2,9 +2,9 @@ use httpmock::Method::{GET, POST};
 use httpmock::MockServer;
 use reviewdesk::domain::{ChangedFile, ReviewEvent};
 use reviewdesk::github::{
-    CiRollupState, DevicePoll, GitHubClient, ReviewSubmitRequest, StaleCheckInput, StaleStatus,
-    assigned_query, build_github_authorize_url, parse_pr_reference, pkce_challenge_s256,
-    review_requested_query,
+    CiRollupState, DevicePoll, GitHubClient, ReviewSubmitComment, ReviewSubmitRequest,
+    StaleCheckInput, StaleStatus, assigned_query, build_github_authorize_url, parse_pr_reference,
+    pkce_challenge_s256, review_requested_query,
 };
 
 #[test]
@@ -635,10 +635,59 @@ async fn submits_top_level_review_payload() {
                 commit_id: "sha".to_string(),
                 event: ReviewEvent::Comment,
                 body: "review body".to_string(),
+                comments: vec![],
             },
         )
         .await
         .expect("review submit");
 
     assert_eq!(review.id, 99);
+}
+
+#[tokio::test]
+async fn submits_review_body_with_inline_comments_payload() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/repos/company/payment-web/pulls/582/reviews")
+            .json_body_obj(&serde_json::json!({
+                "commit_id": "sha",
+                "event": "COMMENT",
+                "body": "review body",
+                "comments": [{
+                    "path": "src/lib.rs",
+                    "side": "RIGHT",
+                    "line": 42,
+                    "body": "inline note"
+                }]
+            }));
+        then.status(200)
+            .header("content-type", "application/json")
+            .json_body_obj(&serde_json::json!({"id": 100}));
+    });
+
+    let client = GitHubClient::for_test(server.url(""), server.url(""), "token");
+    let review = client
+        .submit_review(
+            "company",
+            "payment-web",
+            582,
+            &ReviewSubmitRequest {
+                commit_id: "sha".to_string(),
+                event: ReviewEvent::Comment,
+                body: "review body".to_string(),
+                comments: vec![ReviewSubmitComment {
+                    path: "src/lib.rs".to_string(),
+                    side: "RIGHT".to_string(),
+                    line: 42,
+                    start_line: None,
+                    start_side: None,
+                    body: "inline note".to_string(),
+                }],
+            },
+        )
+        .await
+        .expect("review submit");
+
+    assert_eq!(review.id, 100);
 }

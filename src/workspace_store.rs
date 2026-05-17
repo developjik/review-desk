@@ -1,4 +1,4 @@
-use crate::domain::{AnalysisRun, Result, ReviewDeskError, ReviewDraft};
+use crate::domain::{AnalysisRun, PublishAttempt, Result, ReviewDeskError, ReviewDraft};
 use crate::storage::LocalStore;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -103,6 +103,35 @@ impl WorkspaceStore {
             &format!("{}/drafts/{}.json", key.base_relative(), draft.draft_id),
             draft,
         )
+    }
+
+    pub fn save_publish_attempt(
+        &self,
+        key: &PrWorkspaceKey,
+        attempt: &PublishAttempt,
+    ) -> Result<PathBuf> {
+        validate_segment("attempt_id", &attempt.attempt_id)?;
+        validate_pr_identity(
+            key,
+            &attempt.payload.owner,
+            &attempt.payload.repo,
+            attempt.payload.number,
+        )?;
+        self.ensure_workspace_dirs(key)?;
+        let relative = format!(
+            "{}/publish_attempts/{}.json",
+            key.base_relative(),
+            attempt.attempt_id
+        );
+        let path = self.local.root().join(&relative);
+        let data = serde_json::to_vec_pretty(attempt)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&data)?;
+        set_owner_only_file(&path)?;
+        Ok(path)
     }
 
     pub fn read_draft(&self, key: &PrWorkspaceKey, draft_id: &str) -> Result<ReviewDraft> {
