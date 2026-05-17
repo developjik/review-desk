@@ -230,6 +230,11 @@ fn ipc_allowlist_contains_prd_commands_and_marks_submit_as_high_risk() {
         "collect_pr_context",
         "set_private_diff_consent",
         "generate_review_draft",
+        "create_draft_from_run",
+        "save_review_draft",
+        "read_review_draft",
+        "list_review_drafts",
+        "mark_active_draft",
         "save_draft",
         "prepare_submit_review",
         "confirm_submit_review",
@@ -262,6 +267,24 @@ fn ipc_allowlist_contains_prd_commands_and_marks_submit_as_high_risk() {
         .find(|command| command.name == "logout_github")
         .expect("github logout command exists");
     assert_eq!(github_logout.risk, CommandRisk::WritesLocal);
+    for command_name in [
+        "create_draft_from_run",
+        "save_review_draft",
+        "mark_active_draft",
+    ] {
+        let command = commands
+            .iter()
+            .find(|command| command.name == command_name)
+            .expect("draft write command exists");
+        assert_eq!(command.risk, CommandRisk::WritesLocal);
+    }
+    for command_name in ["read_review_draft", "list_review_drafts"] {
+        let command = commands
+            .iter()
+            .find(|command| command.name == command_name)
+            .expect("draft read command exists");
+        assert_eq!(command.risk, CommandRisk::ReadOnly);
+    }
     assert!(!names.iter().any(|name| name.contains("token")));
 }
 

@@ -114,6 +114,51 @@ impl WorkspaceStore {
         Ok(draft)
     }
 
+    pub fn list_drafts(&self, key: &PrWorkspaceKey) -> Result<Vec<ReviewDraft>> {
+        let drafts_dir = self.local.root().join(key.base_relative()).join("drafts");
+        if !drafts_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(drafts_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = path.file_name().and_then(|value| value.to_str());
+            if file_name == Some("active.json") {
+                continue;
+            }
+            if path.extension().and_then(|value| value.to_str()) == Some("json") {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+
+        let mut drafts = paths
+            .into_iter()
+            .map(|path| {
+                let file_name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| ReviewDeskError::InvalidPath(path.display().to_string()))?;
+                let draft: ReviewDraft = self.local.load_json(&format!(
+                    "{}/drafts/{}",
+                    key.base_relative(),
+                    file_name
+                ))?;
+                validate_segment("draft_id", &draft.draft_id)?;
+                validate_pr_identity(key, &draft.owner, &draft.repo, draft.number)?;
+                Ok(draft)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        drafts.sort_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then_with(|| left.draft_id.cmp(&right.draft_id))
+        });
+        Ok(drafts)
+    }
+
     pub fn mark_active_draft(&self, key: &PrWorkspaceKey, draft_id: &str) -> Result<PathBuf> {
         validate_segment("draft_id", draft_id)?;
         self.read_draft(key, draft_id)?;

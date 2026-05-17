@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-review-draft"
+description = "Enables the read_review_draft command without any pre-configured scope."
+commands.allow = ["read_review_draft"]
+
+[[permission]]
+identifier = "deny-read-review-draft"
+description = "Denies the read_review_draft command without any pre-configured scope."
+commands.deny = ["read_review_draft"]

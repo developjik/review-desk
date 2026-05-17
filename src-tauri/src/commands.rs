@@ -9,7 +9,8 @@ use reviewdesk::app_core::{
 use reviewdesk::auth::{KeyringTokenStore, TokenKind, TokenStore};
 use reviewdesk::codex_bridge::{CodexBridge, CodexBridgeStatusView, sanitize_codex_diagnostics};
 use reviewdesk::domain::{
-    ChangedFile, GitHubErrorKind, PullRequestQueueItem, Repository, ReviewDeskError, ReviewEvent,
+    ChangedFile, GitHubErrorKind, PullRequestQueueItem, Repository, ReviewDeskError, ReviewDraft,
+    ReviewEvent,
 };
 use reviewdesk::github::{
     DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitRequest, SubmittedReviewResponse,
@@ -18,6 +19,7 @@ use reviewdesk::github::{
 use reviewdesk::review::{ReviewPipeline, build_review_input};
 use reviewdesk::security::PrivateDiffConsent;
 use reviewdesk::storage::LocalStore;
+use reviewdesk::workspace_store::{PrWorkspaceKey, WorkspaceStore};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
@@ -1409,6 +1411,107 @@ async fn run_agent_review(
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct CreateDraftFromRunRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub source_run_ids: Vec<String>,
+    pub base_head_sha: String,
+    pub base_diff_hash: String,
+    pub body: String,
+    pub event: ReviewEvent,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveReviewDraftRequest {
+    pub draft: ReviewDraft,
+    pub mark_active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadReviewDraftRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub draft_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListReviewDraftsRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarkActiveDraftRequest {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub draft_id: String,
+}
+
+#[tauri::command]
+pub fn create_draft_from_run(request: CreateDraftFromRunRequest) -> CommandResult<ReviewDraft> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(&request.owner, &request.repo, request.number)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let draft = ReviewDraft {
+        draft_id: new_review_draft_id()?,
+        owner: request.owner,
+        repo: request.repo,
+        number: request.number,
+        source_run_ids: request.source_run_ids,
+        base_head_sha: request.base_head_sha,
+        base_diff_hash: request.base_diff_hash,
+        verdict: request.event,
+        body: request.body,
+        inline_comments: vec![],
+        user_edited: false,
+        stale: false,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    store.save_draft(&key, &draft)?;
+    store.mark_active_draft(&key, &draft.draft_id)?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub fn save_review_draft(request: SaveReviewDraftRequest) -> CommandResult<ReviewDraft> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(&request.draft.owner, &request.draft.repo, request.draft.number)?;
+    store.save_draft(&key, &request.draft)?;
+    if request.mark_active {
+        store.mark_active_draft(&key, &request.draft.draft_id)?;
+    }
+    Ok(request.draft)
+}
+
+#[tauri::command]
+pub fn read_review_draft(request: ReadReviewDraftRequest) -> CommandResult<ReviewDraft> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    Ok(store.read_draft(&key, &request.draft_id)?)
+}
+
+#[tauri::command]
+pub fn list_review_drafts(request: ListReviewDraftsRequest) -> CommandResult<Vec<ReviewDraft>> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    Ok(store.list_drafts(&key)?)
+}
+
+#[tauri::command]
+pub fn mark_active_draft(request: MarkActiveDraftRequest) -> CommandResult<Option<String>> {
+    let store = workspace_store()?;
+    let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
+    store.mark_active_draft(&key, &request.draft_id)?;
+    Ok(store.read_active_draft_id(&key)?)
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SaveDraftRequest {
     pub draft_id: String,
     pub body: String,
@@ -1730,6 +1833,20 @@ fn local_store() -> CommandResult<LocalStore> {
     let cwd = env::current_dir()
         .map_err(|error| CommandError::new("current_dir_failed", error.to_string()))?;
     Ok(LocalStore::init(cwd)?)
+}
+
+fn workspace_store() -> CommandResult<WorkspaceStore> {
+    let cwd = env::current_dir()
+        .map_err(|error| CommandError::new("current_dir_failed", error.to_string()))?;
+    Ok(WorkspaceStore::init(cwd)?)
+}
+
+fn new_review_draft_id() -> CommandResult<String> {
+    let now = chrono::Utc::now();
+    let timestamp = now
+        .timestamp_nanos_opt()
+        .map_or_else(|| now.timestamp_micros() * 1_000, |value| value);
+    Ok(format!("draft-{timestamp}-{}", random_hex(8)?))
 }
 
 fn safe_slug(value: &str) -> String {

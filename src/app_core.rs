@@ -777,6 +777,31 @@ pub fn allowed_ipc_commands() -> &'static [IpcCommandSpec] {
             credential_exposure: false,
         },
         IpcCommandSpec {
+            name: "create_draft_from_run",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "save_review_draft",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "read_review_draft",
+            risk: CommandRisk::ReadOnly,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "list_review_drafts",
+            risk: CommandRisk::ReadOnly,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
+            name: "mark_active_draft",
+            risk: CommandRisk::WritesLocal,
+            credential_exposure: false,
+        },
+        IpcCommandSpec {
             name: "save_draft",
             risk: CommandRisk::WritesLocal,
             credential_exposure: false,

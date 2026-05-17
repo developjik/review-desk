@@ -4445,6 +4445,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "getrandom 0.3.4",
  "globset",
  "keyring",
  "regex",

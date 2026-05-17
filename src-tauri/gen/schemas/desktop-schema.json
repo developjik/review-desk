@@ -375,6 +375,12 @@
           "markdownDescription": "Enables the confirm_submit_review command without any pre-configured scope."
         },
         {
+          "description": "Enables the create_draft_from_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-draft-from-run",
+          "markdownDescription": "Enables the create_draft_from_run command without any pre-configured scope."
+        },
+        {
           "description": "Enables the generate_review_draft command without any pre-configured scope.",
           "type": "string",
           "const": "allow-generate-review-draft",
@@ -411,6 +417,12 @@
           "markdownDescription": "Enables the list_repositories command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_review_drafts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-review-drafts",
+          "markdownDescription": "Enables the list_review_drafts command without any pre-configured scope."
+        },
+        {
           "description": "Enables the load_review_queue command without any pre-configured scope.",
           "type": "string",
           "const": "allow-load-review-queue",
@@ -427,6 +439,12 @@
           "type": "string",
           "const": "allow-logout-github",
           "markdownDescription": "Enables the logout_github command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mark_active_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mark-active-draft",
+          "markdownDescription": "Enables the mark_active_draft command without any pre-configured scope."
         },
         {
           "description": "Enables the open_external_url command without any pre-configured scope.",
@@ -477,6 +495,12 @@
           "markdownDescription": "Enables the read_codex_rate_limits command without any pre-configured scope."
         },
         {
+          "description": "Enables the read_review_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-review-draft",
+          "markdownDescription": "Enables the read_review_draft command without any pre-configured scope."
+        },
+        {
           "description": "Enables the refresh_ai_account_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-refresh-ai-account-status",
@@ -493,6 +517,12 @@
           "type": "string",
           "const": "allow-save-draft",
           "markdownDescription": "Enables the save_draft command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_review_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-review-draft",
+          "markdownDescription": "Enables the save_review_draft command without any pre-configured scope."
         },
         {
           "description": "Enables the select_ai_model command without any pre-configured scope.",
@@ -561,6 +591,12 @@
           "markdownDescription": "Denies the confirm_submit_review command without any pre-configured scope."
         },
         {
+          "description": "Denies the create_draft_from_run command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-draft-from-run",
+          "markdownDescription": "Denies the create_draft_from_run command without any pre-configured scope."
+        },
+        {
           "description": "Denies the generate_review_draft command without any pre-configured scope.",
           "type": "string",
           "const": "deny-generate-review-draft",
@@ -597,6 +633,12 @@
           "markdownDescription": "Denies the list_repositories command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_review_drafts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-review-drafts",
+          "markdownDescription": "Denies the list_review_drafts command without any pre-configured scope."
+        },
+        {
           "description": "Denies the load_review_queue command without any pre-configured scope.",
           "type": "string",
           "const": "deny-load-review-queue",
@@ -613,6 +655,12 @@
           "type": "string",
           "const": "deny-logout-github",
           "markdownDescription": "Denies the logout_github command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mark_active_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mark-active-draft",
+          "markdownDescription": "Denies the mark_active_draft command without any pre-configured scope."
         },
         {
           "description": "Denies the open_external_url command without any pre-configured scope.",
@@ -663,6 +711,12 @@
           "markdownDescription": "Denies the read_codex_rate_limits command without any pre-configured scope."
         },
         {
+          "description": "Denies the read_review_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-review-draft",
+          "markdownDescription": "Denies the read_review_draft command without any pre-configured scope."
+        },
+        {
           "description": "Denies the refresh_ai_account_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-refresh-ai-account-status",
@@ -679,6 +733,12 @@
           "type": "string",
           "const": "deny-save-draft",
           "markdownDescription": "Denies the save_draft command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_review_draft command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-review-draft",
+          "markdownDescription": "Denies the save_review_draft command without any pre-configured scope."
         },
         {
           "description": "Denies the select_ai_model command without any pre-configured scope.",

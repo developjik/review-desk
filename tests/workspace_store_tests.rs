@@ -131,6 +131,41 @@ fn workspace_store_rejects_missing_active_draft_without_creating_dangling_state(
 }
 
 #[test]
+fn draft_created_from_multiple_runs_preserves_sources_and_active_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let mut draft = sample_draft("draft-a", "run-a");
+    draft.source_run_ids = vec![
+        "run-a".to_string(),
+        "run-b".to_string(),
+        "run-c".to_string(),
+    ];
+    draft.updated_at = "2026-05-17T00:00:03Z".to_string();
+
+    assert!(store.mark_active_draft(&key, &draft.draft_id).is_err());
+
+    store.save_draft(&key, &draft).expect("save draft");
+    store
+        .mark_active_draft(&key, &draft.draft_id)
+        .expect("active draft");
+
+    let saved = store
+        .read_draft(&key, &draft.draft_id)
+        .expect("read saved draft");
+    assert_eq!(saved.source_run_ids, draft.source_run_ids);
+    assert_eq!(
+        store.read_active_draft_id(&key).expect("active"),
+        Some(draft.draft_id.clone())
+    );
+
+    let drafts = store.list_drafts(&key).expect("list drafts");
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].draft_id, draft.draft_id);
+    assert_eq!(drafts[0].source_run_ids, draft.source_run_ids);
+}
+
+#[test]
 fn workspace_store_rejects_artifacts_that_do_not_match_workspace_key() {
     let temp = tempfile::tempdir().expect("tempdir");
     let store = WorkspaceStore::init(temp.path()).expect("store");
@@ -229,6 +264,39 @@ fn workspace_store_lists_runs_by_created_at() {
 }
 
 #[test]
+fn workspace_store_lists_drafts_by_updated_at_and_skips_active_marker() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let mut newer = sample_draft("draft-a", "run-a");
+    newer.updated_at = "2026-05-17T00:00:02Z".to_string();
+    let mut same_time_after_id = sample_draft("draft-z", "run-z");
+    same_time_after_id.updated_at = "2026-05-17T00:00:01Z".to_string();
+    let mut same_time_before_id = sample_draft("draft-b", "run-b");
+    same_time_before_id.updated_at = "2026-05-17T00:00:01Z".to_string();
+
+    store.save_draft(&key, &newer).expect("save newer draft");
+    store
+        .save_draft(&key, &same_time_after_id)
+        .expect("save same time after id draft");
+    store
+        .save_draft(&key, &same_time_before_id)
+        .expect("save same time before id draft");
+    store
+        .mark_active_draft(&key, &newer.draft_id)
+        .expect("active draft");
+
+    let drafts = store.list_drafts(&key).expect("drafts");
+    assert_eq!(
+        drafts
+            .iter()
+            .map(|draft| draft.draft_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["draft-b", "draft-z", "draft-a"]
+    );
+}
+
+#[test]
 fn workspace_store_rejects_tampered_loaded_runs_that_do_not_match_workspace_key() {
     for (field, value) in [
         ("owner", serde_json::json!("other-company")),
@@ -266,6 +334,10 @@ fn workspace_store_rejects_tampered_loaded_drafts_that_do_not_match_workspace_ke
         assert!(
             store.read_draft(&key, "draft-a").is_err(),
             "tampered draft {field} should be rejected"
+        );
+        assert!(
+            store.list_drafts(&key).is_err(),
+            "tampered draft {field} should be rejected on list"
         );
     }
 }
