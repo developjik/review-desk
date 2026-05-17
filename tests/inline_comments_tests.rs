@@ -10,6 +10,14 @@ const PATCH: &str = "\
 +extra new line
 }";
 
+const TWO_HUNK_PATCH: &str = "\
+@@ -10,2 +10,2 @@ fn first() {
++first added
+ first context
+@@ -30,2 +30,2 @@ fn second() {
++second added
+ second context";
+
 fn draft(
     id: &str,
     path: &str,
@@ -110,6 +118,21 @@ fn inline_comment_selected_right_side_same_side_range_is_valid() {
     let validated = validate_inline_comments(&[comment], &files, "diff-hash").unwrap();
 
     assert_eq!(validated[0].mapping_status, InlineMappingStatus::Valid);
+}
+
+#[test]
+fn inline_comment_selected_cross_hunk_range_is_invalid_line() {
+    let mut comment = draft("cross-hunk-range", "src/lib.rs", "RIGHT", 30, true, false);
+    comment.start_line = Some(10);
+    comment.start_side = Some("RIGHT".to_string());
+    let files = vec![ChangedFile::new("src/lib.rs", Some(TWO_HUNK_PATCH))];
+
+    let validated = validate_inline_comments(&[comment], &files, "diff-hash").unwrap();
+
+    assert_eq!(
+        validated[0].mapping_status,
+        InlineMappingStatus::InvalidLine
+    );
 }
 
 #[test]
