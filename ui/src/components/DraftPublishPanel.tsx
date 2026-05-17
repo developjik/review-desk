@@ -23,6 +23,7 @@ export function DraftPublishPanel({
   submitMessage,
   publishPayload,
   submitting,
+  privateConsent,
   runDisabled,
   onRunMode,
   onRunCustom,
@@ -32,6 +33,7 @@ export function DraftPublishPanel({
   onSetDraftBody,
   onToggleInlineSelected,
   onDismissInline,
+  onSetPrivateConsent,
   onPrepare,
   onConfirm,
 }: {
@@ -45,6 +47,7 @@ export function DraftPublishPanel({
   submitMessage: string | null;
   publishPayload: ReviewPublishPayloadView | null;
   submitting: boolean;
+  privateConsent: boolean;
   runDisabled?: boolean;
   onRunMode: (mode: AnalysisRunMode) => void;
   onRunCustom: () => void;
@@ -54,6 +57,7 @@ export function DraftPublishPanel({
   onSetDraftBody: (body: string) => void;
   onToggleInlineSelected: (id: string, selected: boolean) => void;
   onDismissInline: (id: string) => void;
+  onSetPrivateConsent: (accepted: boolean) => void;
   onPrepare: () => void;
   onConfirm: () => void;
 }) {
@@ -69,7 +73,13 @@ export function DraftPublishPanel({
           <Badge tone={draft ? "blue" : "neutral"}>{selectedRef}</Badge>
         </div>
         <div className="mb-3 text-xs text-zinc-500">Draft & Publish</div>
-        <RunShelf disabled={runDisabled} onRunMode={onRunMode} onRunCustom={onRunCustom} />
+        <RunShelf
+          disabled={runDisabled}
+          privateConsent={privateConsent}
+          onPrivateConsentChange={onSetPrivateConsent}
+          onRunMode={onRunMode}
+          onRunCustom={onRunCustom}
+        />
         <div className="mt-3 grid grid-cols-4 gap-1">
           {(["draft", "inline", "safety", "runs"] as PanelTab[]).map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab)} className={`h-8 rounded-md text-xs ${activeTab === tab ? "bg-zinc-100 text-zinc-950" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"}`}>

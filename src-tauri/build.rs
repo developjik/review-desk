@@ -1,6 +1,6 @@
 fn main() {
-    tauri_build::try_build(
-        tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
             "get_app_status",
             "get_ai_connection_status",
             "get_codex_bridge_status",
@@ -38,7 +38,7 @@ fn main() {
             "validate_inline_comments",
             "confirm_submit_review",
             "open_external_url",
-        ])),
-    )
+        ]),
+    ))
     .expect("failed to build Tauri app manifest");
 }

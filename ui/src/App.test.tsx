@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import * as ipc from "./lib/ipc";
@@ -13,7 +13,6 @@ vi.mock("./lib/ipc", () => ({
   loadReviewQueue: vi.fn(),
   collectPrContext: vi.fn(),
   listAnalysisRuns: vi.fn(),
-  listReviewDrafts: vi.fn().mockResolvedValue([]),
   readReviewDraft: vi.fn(),
   openExternalUrl: vi.fn(),
   pollCodexChatGptLogin: vi.fn(),
@@ -79,8 +78,15 @@ describe("ReviewDesk app shell", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(ipc.listAnalysisRuns).mockResolvedValue([]);
-    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([]);
     vi.mocked(ipc.readReviewDraft).mockRejectedValue(new Error("draft_not_found"));
+    vi.mocked(ipc.startAgentRun).mockResolvedValue({
+      status: "draft_ready",
+      body: "AI draft",
+      report_path: null,
+      disabled_reason: null,
+      blocked_reason: null,
+      run: null,
+    });
   });
 
   afterEach(() => {
@@ -122,7 +128,6 @@ describe("ReviewDesk app shell", () => {
       sampleAnalysisRun({ run_id: "run-b", mode: "deep" }),
     ]);
     const activeDraft = sampleReviewDraft({ draft_id: "draft-a", body: "User edited draft" });
-    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([activeDraft]);
     vi.mocked(ipc.readReviewDraft).mockResolvedValue(activeDraft);
 
     render(<App />);
@@ -133,26 +138,18 @@ describe("ReviewDesk app shell", () => {
     expect(await screen.findByDisplayValue("User edited draft")).toBeTruthy();
   });
 
-  it("loads the active workspace draft from listed drafts without reading a literal active id", async () => {
+  it("loads the active workspace draft through the active draft lookup", async () => {
     const queue = sampleQueue();
-    const recentDraft = sampleReviewDraft({
-      draft_id: "draft-recent",
+    const activeDraft = sampleReviewDraft({
+      draft_id: "draft-active",
       body: "Persisted active draft",
-      updated_at: "2026-05-17T00:00:03Z",
     });
     vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
     vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
     vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
     vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
     vi.mocked(ipc.listAnalysisRuns).mockResolvedValue([]);
-    vi.mocked(ipc.listReviewDrafts).mockResolvedValue([
-      sampleReviewDraft({ draft_id: "draft-old", body: "Old draft", updated_at: "2026-05-17T00:00:01Z" }),
-      recentDraft,
-    ]);
-    vi.mocked(ipc.readReviewDraft).mockImplementation(async ({ draft_id }) => {
-      if (draft_id === "active") throw new Error("literal active id should not be read");
-      return recentDraft;
-    });
+    vi.mocked(ipc.readReviewDraft).mockResolvedValue(activeDraft);
 
     render(<App />);
 
@@ -161,8 +158,118 @@ describe("ReviewDesk app shell", () => {
       owner: queue[0].owner,
       repo: queue[0].repo,
       number: queue[0].number,
-      draft_id: "draft-recent",
+      draft_id: "active",
     });
-    expect(ipc.readReviewDraft).not.toHaveBeenCalledWith(expect.objectContaining({ draft_id: "active" }));
+  });
+
+  it("passes private diff consent into agent runs when accepted", async () => {
+    const queue = sampleQueue();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(aiReadyStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockResolvedValue(sampleContext(queue[0]));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("checkbox", { name: "Allow private diff analysis" }));
+    fireEvent.click(screen.getByRole("button", { name: "Fast" }));
+
+    await waitFor(() =>
+      expect(ipc.startAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          private_diff_consent_required: true,
+          private_diff_consent_accepted: true,
+        }),
+      ),
+    );
+  });
+
+  it("ignores slower PR selection responses after a newer PR is selected", async () => {
+    const queue = sampleQueue();
+    const firstContext = deferred<ReturnType<typeof sampleContext>>();
+    const secondContext = {
+      ...sampleContext(queue[1]),
+      pr: { ...sampleContext(queue[1]).pr, head_sha: "second-head-sha" },
+    };
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockImplementation((item) => {
+      if (item.number === queue[0].number) return firstContext.promise;
+      return Promise.resolve(secondContext);
+    });
+
+    render(<App />);
+
+    fireEvent.click(await findQueueItem("User hook refactor"));
+    expect(await screen.findByText("head second-h")).toBeTruthy();
+
+    firstContext.resolve({
+      ...sampleContext(queue[0]),
+      pr: { ...sampleContext(queue[0]).pr, head_sha: "first-head-sha" },
+    });
+
+    await waitFor(() => expect(screen.getByText("head second-h")).toBeTruthy());
+    expect(screen.queryByText("head first-he")).toBeNull();
+  });
+
+  it("does not copy a previous PR draft into a new PR without a persisted draft", async () => {
+    const queue = sampleQueue();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockImplementation((item) => Promise.resolve(sampleContext(item)));
+    vi.mocked(ipc.readReviewDraft).mockImplementation(({ repo }) => {
+      if (repo === queue[0].repo) {
+        return Promise.resolve(sampleReviewDraft({ body: "First PR draft" }));
+      }
+      return Promise.reject(new Error("draft_not_found"));
+    });
+
+    render(<App />);
+
+    expect(await screen.findByDisplayValue("First PR draft")).toBeTruthy();
+    fireEvent.click(await findQueueItem("User hook refactor"));
+
+    await waitFor(() => expect(screen.queryByDisplayValue("First PR draft")).toBeNull());
   });
 });
+
+function aiReadyStatus(): ReturnType<typeof sampleConnectedStatus> {
+  const status = sampleConnectedStatus();
+  return {
+    ...status,
+    chatgpt: "connected" as const,
+    ai_review_available: true,
+    capabilities: {
+      ...status.capabilities!,
+      ai_review_available: true,
+      blocked_reasons: [],
+    },
+    generation_available: true,
+    generation_blocked_reason: null,
+    ai_blocked_reason: null,
+    ai_connection: status.ai_connection
+      ? {
+          ...status.ai_connection,
+          status: "connected" as const,
+          blockedReason: null,
+        }
+      : status.ai_connection,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function findQueueItem(title: string) {
+  const [itemTitle] = await screen.findAllByText(title);
+  return itemTitle.closest("button") ?? itemTitle;
+}

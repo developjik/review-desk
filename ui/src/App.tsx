@@ -9,7 +9,6 @@ import {
   getCodexBridgeStatus,
   listAiModels,
   listAnalysisRuns,
-  listReviewDrafts,
   listRepositories,
   loadReviewQueue,
   openExternalUrl,
@@ -65,6 +64,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 
 export default function App() {
   const commandInputRef = useRef<HTMLInputElement>(null);
+  const selectionSequenceRef = useRef(0);
   const [workspace, dispatchWorkspace] = useReducer(workspaceReducer, initialWorkspaceState);
   const [status, setStatus] = useState<AppStatusView>(sampleStatus());
   const [languagePreferences, setLanguagePreferences] = useState<LanguagePreferences>(
@@ -245,6 +245,10 @@ export default function App() {
   }
 
   async function selectPullRequest(item: PullRequestQueueItem) {
+    const selectionSequence = selectionSequenceRef.current + 1;
+    selectionSequenceRef.current = selectionSequence;
+    const isLatestSelection = () => selectionSequenceRef.current === selectionSequence;
+
     setSelectedPr(item);
     dispatchWorkspace({ type: "select_pr", pr: item });
     setContextState("loading");
@@ -252,11 +256,16 @@ export default function App() {
     setPreflight(null);
     setDraftDirtySincePreflight(true);
     setSubmittedReviewId(null);
-    const nextContext = await collectPrContext(item).catch((error: unknown) => {
+    let nextContext: PullRequestContextView | null;
+    try {
+      nextContext = await collectPrContext(item);
+    } catch (error) {
+      if (!isLatestSelection()) return;
       setContextState("error");
       setContextError(error instanceof Error ? error.message : "pr_context_failed");
-      return null;
-    });
+      return;
+    }
+    if (!isLatestSelection()) return;
     if (!nextContext) return;
     setContext(nextContext);
     setSelectedFile(nextContext.files[0] ?? null);
@@ -268,11 +277,12 @@ export default function App() {
       listAnalysisRuns(workspaceInput),
       loadWorkspaceDraft(workspaceInput),
     ]);
+    if (!isLatestSelection()) return;
     dispatchWorkspace({
       type: "load_runs_success",
       runs: runsResult.status === "fulfilled" && Array.isArray(runsResult.value) ? runsResult.value : [],
     });
-    const fallbackDraft = createManualReviewDraft(item, nextContext, draft);
+    const fallbackDraft = createManualReviewDraft(item, nextContext);
     const nextDraft = draftResult.status === "fulfilled" && draftResult.value ? draftResult.value : fallbackDraft;
     dispatchWorkspace({ type: "load_draft_success", draft: nextDraft });
     setDraft(nextDraft.body);
@@ -624,6 +634,7 @@ export default function App() {
           submitMessage,
           publishPayload,
           submitting,
+          privateConsent,
           runDisabled: !selectedPr || !context,
           onRunMode: runAgent,
           onRunCustom: () => runAgent("custom"),
@@ -637,6 +648,11 @@ export default function App() {
           onSetDraftBody: updateDraft,
           onToggleInlineSelected: updateInlineSelection,
           onDismissInline: dismissInline,
+          onSetPrivateConsent: (accepted) => {
+            setPrivateConsent(accepted);
+            setDraftDirtySincePreflight(true);
+            setPreflight(null);
+          },
           onPrepare: prepareSubmit,
           onConfirm: confirmSubmit,
         }}
@@ -651,7 +667,6 @@ export default function App() {
 function createManualReviewDraft(
   item: PullRequestQueueItem,
   context: PullRequestContextView,
-  body: string,
 ): ReviewDraftView {
   const now = new Date().toISOString();
   return {
@@ -663,9 +678,9 @@ function createManualReviewDraft(
     base_head_sha: context.pr.head_sha,
     base_diff_hash: context.diff_hash,
     verdict: "COMMENT",
-    body,
+    body: "",
     inline_comments: [],
-    user_edited: body.trim().length > 0,
+    user_edited: false,
     stale: false,
     created_at: now,
     updated_at: now,
@@ -677,15 +692,7 @@ async function loadWorkspaceDraft(input: {
   repo: string;
   number: number;
 }): Promise<ReviewDraftView | null> {
-  const drafts = await listReviewDrafts(input).catch(() => []);
-  const selectedDraft = selectMostRecentDraft(drafts);
-  if (!selectedDraft) return null;
-  return readReviewDraft({ ...input, draft_id: selectedDraft.draft_id }).catch(() => selectedDraft);
-}
-
-function selectMostRecentDraft(drafts: ReviewDraftView[]): ReviewDraftView | null {
-  if (drafts.length === 0) return null;
-  return [...drafts].sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null;
+  return readReviewDraft({ ...input, draft_id: "active" }).catch(() => null);
 }
 
 function analysisRunFromAgentResult(

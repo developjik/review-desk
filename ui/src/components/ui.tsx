@@ -1,17 +1,21 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import { forwardRef, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "../lib/utils";
 
 export function Panel({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return <section className={cn("border border-zinc-800 bg-zinc-950/80", className)} {...props} />;
 }
 
-export function Button({
+export const Button = forwardRef<
+  HTMLButtonElement,
+  ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "ghost" | "danger" }
+>(function Button({
   className,
   variant = "default",
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "ghost" | "danger" }) {
+}, ref) {
   return (
     <button
+      ref={ref}
       className={cn(
         "inline-flex h-9 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400",
@@ -24,7 +28,7 @@ export function Button({
       {...props}
     />
   );
-}
+});
 
 export function Badge({
   tone = "neutral",

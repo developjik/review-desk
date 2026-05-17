@@ -11,15 +11,32 @@ const quickModes: Array<{ mode: AnalysisRunMode; label: string; icon: typeof Zap
 
 export function RunShelf({
   disabled,
+  privateConsent,
+  onPrivateConsentChange,
   onRunMode,
   onRunCustom,
 }: {
   disabled?: boolean;
+  privateConsent: boolean;
+  onPrivateConsentChange: (accepted: boolean) => void;
   onRunMode: (mode: AnalysisRunMode) => void;
   onRunCustom: () => void;
 }) {
   return (
     <div className="grid gap-2">
+      <label className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-300">
+        <input
+          type="checkbox"
+          aria-label="Allow private diff analysis"
+          checked={privateConsent}
+          onChange={(event) => onPrivateConsentChange(event.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="block font-medium text-zinc-100">Allow private diff analysis</span>
+          <span className="block text-zinc-500">Required before sending private PR patches to AI analysis.</span>
+        </span>
+      </label>
       <div className="grid grid-cols-2 gap-2">
         {quickModes.map(({ mode, label, icon: Icon }) => (
           <Button key={mode} variant="ghost" onClick={() => onRunMode(mode)} disabled={disabled}>

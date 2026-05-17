@@ -21,3 +21,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 url = "2"
 webbrowser = "1"
 getrandom = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

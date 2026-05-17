@@ -1,6 +1,6 @@
 use reviewdesk::app_core::{
-    AgentRunRecordView, AiBlockedReason, AiConnectionStatus, AiConnectionStatusView,
-    AiModelView, AiRateLimitSnapshot, AiRateLimitStatus, AppStatusContext, AppStatusView, Locale,
+    AgentRunRecordView, AiBlockedReason, AiConnectionStatus, AiConnectionStatusView, AiModelView,
+    AiRateLimitSnapshot, AiRateLimitStatus, AppStatusContext, AppStatusView, Locale,
     ReasoningEffort, frontend_safe_app_status_from_context, validate_ai_run_configuration,
     validate_external_url,
 };
@@ -271,10 +271,7 @@ async fn start_github_browser_oauth(
         .map_err(|error| CommandError::new("loopback_port_unavailable", error.to_string()))?
         .port();
     let local_redirect_uri = format!("http://127.0.0.1:{port}{GITHUB_OAUTH_CALLBACK_PATH}");
-    let broker_redirect_uri = format!(
-        "{}/auth/github/callback",
-        broker_base.trim_end_matches('/')
-    );
+    let broker_redirect_uri = format!("{}/auth/github/callback", broker_base.trim_end_matches('/'));
     let state_value = random_hex(32)?;
     let code_verifier = random_hex(48)?;
     let code_challenge = pkce_challenge_s256(&code_verifier);
@@ -458,7 +455,9 @@ pub fn cancel_github_oauth(
 }
 
 #[tauri::command]
-pub fn logout_github(state: tauri::State<'_, ReviewDeskTauriState>) -> CommandResult<OAuthPollView> {
+pub fn logout_github(
+    state: tauri::State<'_, ReviewDeskTauriState>,
+) -> CommandResult<OAuthPollView> {
     let mut store = KeyringTokenStore::default();
     store.delete(TokenKind::GitHub)?;
     *state
@@ -503,10 +502,16 @@ async fn github_connection_state(
     match GitHubClient::new(token).current_user().await {
         Ok(_) => Ok(reviewdesk::app_core::AuthConnectionState::Connected),
         Err(ReviewDeskError::GitHubApi { kind, .. }) => Ok(match kind {
-            GitHubErrorKind::AuthRequired => reviewdesk::app_core::AuthConnectionState::ReauthRequired,
-            GitHubErrorKind::ScopeMissing => reviewdesk::app_core::AuthConnectionState::ScopeMissing,
+            GitHubErrorKind::AuthRequired => {
+                reviewdesk::app_core::AuthConnectionState::ReauthRequired
+            }
+            GitHubErrorKind::ScopeMissing => {
+                reviewdesk::app_core::AuthConnectionState::ScopeMissing
+            }
             GitHubErrorKind::SsoRequired => reviewdesk::app_core::AuthConnectionState::SsoRequired,
-            GitHubErrorKind::RateLimited | GitHubErrorKind::SecondaryRateLimited | GitHubErrorKind::SearchRateLimited => {
+            GitHubErrorKind::RateLimited
+            | GitHubErrorKind::SecondaryRateLimited
+            | GitHubErrorKind::SearchRateLimited => {
                 reviewdesk::app_core::AuthConnectionState::RateLimited
             }
             _ => reviewdesk::app_core::AuthConnectionState::Missing,
@@ -852,7 +857,11 @@ pub async fn start_codex_chatgpt_login(
             auth_url: None,
             verification_url: None,
             user_code: None,
-            disabled_reason: Some(AiBlockedReason::CodexChatgptUnsupported.as_str().to_string()),
+            disabled_reason: Some(
+                AiBlockedReason::CodexChatgptUnsupported
+                    .as_str()
+                    .to_string(),
+            ),
         });
     }
 
@@ -867,7 +876,11 @@ pub async fn start_codex_chatgpt_login(
             auth_url: None,
             verification_url: None,
             user_code: None,
-            disabled_reason: Some(AiBlockedReason::CodexAppServerUnavailable.as_str().to_string()),
+            disabled_reason: Some(
+                AiBlockedReason::CodexAppServerUnavailable
+                    .as_str()
+                    .to_string(),
+            ),
         });
     };
     *state
@@ -879,8 +892,12 @@ pub async fn start_codex_chatgpt_login(
         });
 
     if let Some(url) = auth_url.as_deref().or(verification_url.as_deref()) {
-        validate_external_url(&url)
-            .map_err(|_| CommandError::new("external_url_not_allowed", "Codex login URL is not allowlisted."))?;
+        validate_external_url(&url).map_err(|_| {
+            CommandError::new(
+                "external_url_not_allowed",
+                "Codex login URL is not allowlisted.",
+            )
+        })?;
     }
 
     Ok(CodexChatGptLoginStartView {
@@ -943,7 +960,9 @@ pub async fn poll_codex_chatgpt_login(
             mode: Some("codex_chatgpt".to_string()),
             status: "pending".to_string(),
             account_login: None,
-            disabled_reason: connection.blocked_reason.map(|reason| reason.as_str().to_string()),
+            disabled_reason: connection
+                .blocked_reason
+                .map(|reason| reason.as_str().to_string()),
         })
     }
 }
@@ -1068,7 +1087,11 @@ pub fn start_chatgpt_oauth(_request: StartOAuthRequest) -> OAuthStartView {
         verification_uri: None,
         expires_in: None,
         interval: None,
-        disabled_reason: Some(AiBlockedReason::CodexChatgptUnsupported.as_str().to_string()),
+        disabled_reason: Some(
+            AiBlockedReason::CodexChatgptUnsupported
+                .as_str()
+                .to_string(),
+        ),
     }
 }
 
@@ -1144,7 +1167,10 @@ pub fn set_private_diff_consent(request: PrivateDiffConsentRequest) -> CommandRe
         transmitted_scope: request.transmitted_scope,
     };
     let path = store.save_json(
-        &format!("state/private-diff-consent-{}.json", safe_slug(&request.repository)),
+        &format!(
+            "state/private-diff-consent-{}.json",
+            safe_slug(&request.repository)
+        ),
         &consent,
     )?;
     Ok(path.display().to_string())
@@ -1221,7 +1247,11 @@ pub fn cancel_agent_run(
         run.run.status = "cancelled".to_string();
         run.run.blocked_reason = Some(AiBlockedReason::CodexGenerationInterrupted);
         run.run.completed_at = Some(chrono::Utc::now().to_rfc3339());
-        run.disabled_reason = Some(AiBlockedReason::CodexGenerationInterrupted.as_str().to_string());
+        run.disabled_reason = Some(
+            AiBlockedReason::CodexGenerationInterrupted
+                .as_str()
+                .to_string(),
+        );
     }
     Ok(run.clone())
 }
@@ -1300,9 +1330,7 @@ async fn run_agent_review(
     if models.is_empty() {
         return blocked_generated_draft(state, run, AiBlockedReason::ModelListUnavailable);
     }
-    if let Err(reason) =
-        validate_ai_run_configuration(&models, &request.model, reasoning_effort)
-    {
+    if let Err(reason) = validate_ai_run_configuration(&models, &request.model, reasoning_effort) {
         return blocked_generated_draft(state, run, reason);
     }
     if let Some(reason) = rate_limit.blocked_reason {
@@ -1330,8 +1358,9 @@ async fn run_agent_review(
         let result = pipeline.generate_or_block(&provider, input).await?;
         (result.draft.body, result.markdown, result.run.error)
     } else {
-        let bridge = CodexBridge::resolve_from_env()
-            .map_err(|_| CommandError::new("codex_cli_missing", "Codex CLI was not found on PATH."))?;
+        let bridge = CodexBridge::resolve_from_env().map_err(|_| {
+            CommandError::new("codex_cli_missing", "Codex CLI was not found on PATH.")
+        })?;
         let prompt = build_codex_review_prompt(
             &request.owner,
             &request.repo,
@@ -1346,7 +1375,9 @@ async fn run_agent_review(
             .await
         {
             Ok(draft) => {
-                let sanitized = reviewdesk::security::SecretMasker::default().mask(&draft).text;
+                let sanitized = reviewdesk::security::SecretMasker::default()
+                    .mask(&draft)
+                    .text;
                 let markdown = format!(
                     "# ReviewDesk Codex Report\n\nPR: {}/{}#{}\n\n## Draft\n\n{}\n",
                     request.owner, request.repo, request.number, sanitized
@@ -1357,13 +1388,7 @@ async fn run_agent_review(
                 run.status = "failed".to_string();
                 run.blocked_reason = Some(reason);
                 run.completed_at = Some(chrono::Utc::now().to_rfc3339());
-                remember_agent_run(
-                    &state,
-                    &run,
-                    None,
-                    None,
-                    Some(reason.as_str().to_string()),
-                )?;
+                remember_agent_run(&state, &run, None, None, Some(reason.as_str().to_string()))?;
                 return Ok(GeneratedDraftView {
                     status: "failed".to_string(),
                     body: String::new(),
@@ -1378,10 +1403,7 @@ async fn run_agent_review(
     let store = local_store()?;
     run.status = "draft_ready".to_string();
     run.completed_at = Some(chrono::Utc::now().to_rfc3339());
-    let run_path = store.save_json(
-        &format!("runs/{}.json", safe_slug(&run.run_id)),
-        &run,
-    )?;
+    let run_path = store.save_json(&format!("runs/{}.json", safe_slug(&run.run_id)), &run)?;
     let report_path = store.save_text(
         &format!(
             "reviews/{}-{}-{}.md",
@@ -1402,11 +1424,7 @@ async fn run_agent_review(
     Ok(GeneratedDraftView {
         status: "draft_ready".to_string(),
         body: draft_body,
-        report_path: Some(format!(
-            "{}\n{}",
-            report_path.display(),
-            run_path.display()
-        )),
+        report_path: Some(format!("{}\n{}", report_path.display(), run_path.display())),
         disabled_reason,
         blocked_reason: None,
         run: Some(run),
@@ -1484,7 +1502,11 @@ pub fn create_draft_from_run(request: CreateDraftFromRunRequest) -> CommandResul
 #[tauri::command]
 pub fn save_review_draft(request: SaveReviewDraftRequest) -> CommandResult<ReviewDraft> {
     let store = workspace_store()?;
-    let key = PrWorkspaceKey::new(&request.draft.owner, &request.draft.repo, request.draft.number)?;
+    let key = PrWorkspaceKey::new(
+        &request.draft.owner,
+        &request.draft.repo,
+        request.draft.number,
+    )?;
     store.save_draft(&key, &request.draft)?;
     if request.mark_active {
         store.mark_active_draft(&key, &request.draft.draft_id)?;
@@ -1496,7 +1518,14 @@ pub fn save_review_draft(request: SaveReviewDraftRequest) -> CommandResult<Revie
 pub fn read_review_draft(request: ReadReviewDraftRequest) -> CommandResult<ReviewDraft> {
     let store = workspace_store()?;
     let key = PrWorkspaceKey::new(request.owner, request.repo, request.number)?;
-    Ok(store.read_draft(&key, &request.draft_id)?)
+    let draft_id = if request.draft_id == "active" {
+        store.read_active_draft_id(&key)?.ok_or_else(|| {
+            CommandError::new("draft_not_found", "No active review draft was found.")
+        })?
+    } else {
+        request.draft_id
+    };
+    Ok(store.read_draft(&key, &draft_id)?)
 }
 
 #[tauri::command]
@@ -1618,7 +1647,13 @@ pub async fn confirm_submit_review(
         )
         .await
         .map_err(|error| {
-            record_publish_error(&store, &key, &request.payload, &request.confirmation_id, error)
+            record_publish_error(
+                &store,
+                &key,
+                &request.payload,
+                &request.confirmation_id,
+                error,
+            )
         })?;
     let pull_files = client
         .list_pull_files(
@@ -1628,7 +1663,13 @@ pub async fn confirm_submit_review(
         )
         .await
         .map_err(|error| {
-            record_publish_error(&store, &key, &request.payload, &request.confirmation_id, error)
+            record_publish_error(
+                &store,
+                &key,
+                &request.payload,
+                &request.confirmation_id,
+                error,
+            )
         })?;
     let changed_files = pull_files
         .into_iter()
@@ -1801,8 +1842,12 @@ pub struct OpenExternalUrlRequest {
 
 #[tauri::command]
 pub fn open_external_url(request: OpenExternalUrlRequest) -> CommandResult<()> {
-    let url = validate_external_url(&request.url)
-        .map_err(|_| CommandError::new("external_url_not_allowed", "Only HTTPS GitHub and ChatGPT URLs can be opened."))?;
+    let url = validate_external_url(&request.url).map_err(|_| {
+        CommandError::new(
+            "external_url_not_allowed",
+            "Only HTTPS GitHub and ChatGPT URLs can be opened.",
+        )
+    })?;
     webbrowser::open(url.as_str())
         .map_err(|error| CommandError::new("open_external_url_failed", error.to_string()))?;
     Ok(())
@@ -1858,7 +1903,10 @@ async fn codex_rate_limit_snapshot() -> AiRateLimitSnapshot {
     if let Ok(bridge) = CodexBridge::resolve_from_env() {
         return bridge.read_rate_limits().await;
     }
-    match env::var("REVIEWDESK_CODEX_RATE_LIMIT_STATUS").ok().as_deref() {
+    match env::var("REVIEWDESK_CODEX_RATE_LIMIT_STATUS")
+        .ok()
+        .as_deref()
+    {
         Some("rate_limited") => AiRateLimitSnapshot {
             status: AiRateLimitStatus::RateLimited,
             checked_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -2059,6 +2107,77 @@ fn github_error_code(kind: GitHubErrorKind) -> &'static str {
         GitHubErrorKind::NotFound => "github_not_found",
         GitHubErrorKind::Network => "github_network",
         GitHubErrorKind::Unknown => "github_unknown",
+    }
+}
+
+#[cfg(test)]
+mod active_draft_tests {
+    use super::*;
+    use reviewdesk::domain::{InlineMappingStatus, ReviewEvent};
+    use std::sync::Mutex;
+
+    static CURRENT_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn read_review_draft_resolves_active_marker_to_marked_draft() {
+        let _guard = CURRENT_DIR_LOCK.lock().expect("current dir lock");
+        let original_dir = std::env::current_dir().expect("current dir");
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(temp.path()).expect("set temp dir");
+
+        let draft = sample_review_draft("draft-a", "Active draft body");
+        save_review_draft(SaveReviewDraftRequest {
+            draft: draft.clone(),
+            mark_active: true,
+        })
+        .expect("save active draft");
+
+        let active = read_review_draft(ReadReviewDraftRequest {
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            draft_id: "active".to_string(),
+        })
+        .expect("read active draft");
+
+        std::env::set_current_dir(original_dir).expect("restore dir");
+        assert_eq!(active.draft_id, "draft-a");
+        assert_eq!(active.body, "Active draft body");
+    }
+
+    fn sample_review_draft(draft_id: &str, body: &str) -> ReviewDraft {
+        ReviewDraft {
+            draft_id: draft_id.to_string(),
+            owner: "company".to_string(),
+            repo: "payment-web".to_string(),
+            number: 582,
+            source_run_ids: vec![],
+            base_head_sha: "head".to_string(),
+            base_diff_hash: "diff".to_string(),
+            verdict: ReviewEvent::Comment,
+            body: body.to_string(),
+            inline_comments: vec![InlineCommentDraft {
+                id: "comment-a".to_string(),
+                path: "src/lib.rs".to_string(),
+                side: "RIGHT".to_string(),
+                line: 12,
+                start_line: None,
+                start_side: None,
+                body: "Inline body".to_string(),
+                severity: None,
+                confidence: None,
+                source_run_id: None,
+                source_finding_id: None,
+                selected_for_publish: false,
+                dismissed: false,
+                user_edited: false,
+                mapping_status: InlineMappingStatus::Valid,
+            }],
+            user_edited: true,
+            stale: false,
+            created_at: "2026-05-17T00:00:00Z".to_string(),
+            updated_at: "2026-05-17T00:00:01Z".to_string(),
+        }
     }
 }
 

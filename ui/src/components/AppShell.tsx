@@ -60,6 +60,7 @@ export function AppShell({
     submitMessage: string | null;
     publishPayload: ReviewPublishPayloadView | null;
     submitting: boolean;
+    privateConsent: boolean;
     runDisabled?: boolean;
     onRunMode: (mode: AnalysisRunMode) => void;
     onRunCustom: () => void;
@@ -69,6 +70,7 @@ export function AppShell({
     onSetDraftBody: (body: string) => void;
     onToggleInlineSelected: (id: string, selected: boolean) => void;
     onDismissInline: (id: string) => void;
+    onSetPrivateConsent: (accepted: boolean) => void;
     onPrepare: () => void;
     onConfirm: () => void;
   };
