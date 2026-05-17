@@ -423,6 +423,58 @@ describe("ReviewDesk app shell", () => {
     });
   });
 
+  it("clears stale submit progress after switching PRs during confirmation", async () => {
+    const queue = sampleQueue();
+    const confirmation = deferred<Awaited<ReturnType<typeof ipc.confirmSubmitReview>>>();
+    vi.mocked(ipc.getAppStatus).mockResolvedValue(sampleConnectedStatus());
+    vi.mocked(ipc.listRepositories).mockResolvedValue(sampleRepositories());
+    vi.mocked(ipc.loadReviewQueue).mockResolvedValue(queue);
+    vi.mocked(ipc.collectPrContext).mockImplementation((item) => Promise.resolve(sampleContext(item)));
+    vi.mocked(ipc.readReviewDraft).mockImplementation(({ repo }) =>
+      Promise.resolve(
+        sampleReviewDraft({
+          draft_id: `draft-${repo}`,
+          owner: "company",
+          repo,
+          number: repo === queue[0].repo ? queue[0].number : queue[1].number,
+          body: `Ready to publish ${repo}`,
+          inline_comments: [],
+        }),
+      ),
+    );
+    vi.mocked(ipc.prepareSubmitReview).mockResolvedValue({
+      status: "ready",
+      blocked_reasons: [],
+      confirmation_id: "confirm-a",
+    });
+    vi.mocked(ipc.confirmSubmitReview).mockReturnValue(confirmation.promise);
+
+    render(<App />);
+
+    expect(await screen.findByDisplayValue("Ready to publish payment-web")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Safety" }));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare" }));
+    await waitFor(() => {
+      const confirmButton = screen.getByRole("button", { name: "Confirm Submit" }) as HTMLButtonElement;
+      expect(confirmButton.disabled).toBe(false);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Submit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+    await waitFor(() => expect(screen.getByText("Submitting review...")).toBeTruthy());
+
+    fireEvent.click(await findQueueItem("User hook refactor"));
+    await waitFor(() => expect(screen.getAllByText("company/admin#588").length).toBeGreaterThan(0));
+
+    confirmation.resolve({ id: 991, url: "https://github.com/company/payment-web/pull/582#pullrequestreview-991" });
+    await waitFor(() => expect(ipc.confirmSubmitReview).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.queryByText("Submitting review...")).toBeNull();
+    expect(screen.queryByText("Submitted review #991")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+  });
+
   it("ignores slower PR selection responses after a newer PR is selected", async () => {
     const queue = sampleQueue();
     const firstContext = deferred<ReturnType<typeof sampleContext>>();

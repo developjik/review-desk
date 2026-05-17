@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "./ui";
 import { DraftBodyTab } from "./DraftBodyTab";
 import { InlineCommentsTab } from "./InlineCommentsTab";
@@ -64,6 +64,10 @@ export function DraftPublishPanel({
   const [activeTab, setActiveTab] = useState<PanelTab>("draft");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const comments: InlineCommentDraftView[] = draft?.inline_comments ?? [];
+
+  useEffect(() => {
+    setConfirmOpen(false);
+  }, [selectedRef]);
 
   return (
     <aside className="reviewdesk-draft-panel min-h-0 border-l border-zinc-800 bg-zinc-950">

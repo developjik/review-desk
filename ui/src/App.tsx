@@ -260,6 +260,8 @@ export default function App() {
     setPreflight(null);
     setDraftDirtySincePreflight(true);
     setSubmittedReviewId(null);
+    setSubmitting(false);
+    setSubmitMessage(null);
     let nextContext: PullRequestContextView | null;
     try {
       nextContext = await collectPrContext(item);

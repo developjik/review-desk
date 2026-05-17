@@ -7,10 +7,11 @@ Date: 2026-05-17
 - `cargo fmt --check`: pass
 - `cargo test`: pass
 - `cargo test --manifest-path src-tauri/Cargo.toml`: pass
-- `npm test`: pass
+- `npm test`: pass (46 tests)
 - `npm run build`: pass
 - `npm run desktop:build`: pass
 - `git diff --check`: pass
+- Browser smoke test at `http://127.0.0.1:1420/?reviewdesk_demo=1`: pass, with no console errors
 
 ## Verified Behaviors
 
@@ -23,3 +24,5 @@ Date: 2026-05-17
 - Publish preflight blocks stale head, stale diff, invalid mappings, closed or merged PRs, auth/scope/SSO blockers, and empty payload.
 - Publish preview and confirm submit use the same payload shape.
 - GitHub review submission includes selected inline comments.
+- Stale prepare, validation, run completion, and submit completion responses are ignored after switching PRs.
+- Switching PRs while a publish confirmation is in flight clears submit progress and closes the old confirmation dialog.
