@@ -13,7 +13,7 @@
 
 body {
   margin: 0;
-  min-width: 800px;
+  min-width: 360px;
   background: #09090b;
 }
 
@@ -34,4 +34,29 @@ select {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+.reviewdesk-workspace-grid {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 360px;
+}
+
+@media (max-width: 1180px) {
+  .reviewdesk-workspace-grid {
+    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(420px, 48vh);
+    overflow: auto;
+  }
+
+  .reviewdesk-draft-panel {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid #27272a;
+  }
+}
+
+@media (max-width: 760px) {
+  .reviewdesk-workspace-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

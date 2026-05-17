@@ -15,7 +15,8 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { AppShell } from "./components/AppShell";
 import { Badge, Button, Kbd, Panel } from "./components/ui";
 import {
   collectPrContext,
@@ -23,12 +24,14 @@ import {
   getAppStatus,
   getCodexBridgeStatus,
   listAiModels,
+  listAnalysisRuns,
   listRepositories,
   loadReviewQueue,
   openExternalUrl,
   pollCodexChatGptLogin,
   pollGithubOAuth,
   prepareSubmitReview,
+  readReviewDraft,
   refreshAiAccountStatus,
   refreshGithubAuthStatus,
   startAgentRun,
@@ -38,6 +41,8 @@ import {
   type SubmitPreflightView,
 } from "./lib/ipc";
 import { t } from "./lib/i18n";
+import { dismissInlineCommentById, setInlineCommentSelection } from "./lib/inline-comments";
+import { initialWorkspaceState, workspaceReducer } from "./lib/workspace-state";
 import {
   commandDisabledReason,
   defaultLanguagePreferences,
@@ -53,6 +58,7 @@ import {
   selectedAiModel,
   shouldShowStartupGate,
   summarizeQueueItem,
+  type AgentRunRecordView,
   type AiModelView,
   type AppStatusView,
   type ChangedFileContext,
@@ -67,6 +73,7 @@ import {
   type Repository,
   type RiskBadge,
 } from "./lib/view-models";
+import type { AnalysisRunMode, AnalysisRunView, InlineCommentDraftView, ReviewDraftView } from "./lib/workspace-view-models";
 import {
   authPollTerminalMessage,
   shouldPollCodexLogin,
@@ -85,6 +92,7 @@ type LoadState = "idle" | "loading" | "ready" | "error";
 
 export default function App() {
   const commandInputRef = useRef<HTMLInputElement>(null);
+  const [workspace, dispatchWorkspace] = useReducer(workspaceReducer, initialWorkspaceState);
   const [status, setStatus] = useState<AppStatusView>(sampleStatus());
   const [languagePreferences, setLanguagePreferences] = useState<LanguagePreferences>(
     sampleStatus().language_preferences ?? defaultLanguagePreferences(navigator.language),
@@ -124,6 +132,8 @@ export default function App() {
   const locale = languagePreferences.ui_locale;
   const appShellAvailable = status.capabilities?.app_shell_available ?? status.github === "connected";
   const selectedRef = selectedPr ? pullRequestRef(selectedPr) : "No PR selected";
+  const activeDraft = workspace.activeDraft;
+  const activeDraftBody = activeDraft?.body ?? draft;
 
   const filteredQueue = useMemo(() => {
     const query = commandQuery.trim().toLowerCase();
@@ -146,9 +156,9 @@ export default function App() {
 
   const draftRefs = useMemo(() => {
     const refs = new Set<string>();
-    if (selectedPr && draft.trim()) refs.add(pullRequestRef(selectedPr));
+    if (selectedPr && activeDraftBody.trim()) refs.add(pullRequestRef(selectedPr));
     return refs;
-  }, [draft, selectedPr]);
+  }, [activeDraftBody, selectedPr]);
 
   const inboxSections = useMemo(
     () => groupQueueBySection(filteredQueue, { draftRefs, submittedRefs }),
@@ -157,13 +167,18 @@ export default function App() {
 
   const safetyState = deriveSubmitSafetyState({
     hasTarget: Boolean(selectedPr && context),
-    draftBody: draft,
+    draftBody: activeDraftBody,
     draftDirtySincePreflight,
     preflight,
     submitting,
     submittedReviewId,
     submitMessage,
   });
+
+  const publishPayload = useMemo(
+    () => (selectedPr && context ? currentReviewPublishPayload(selectedPr, context) : null),
+    [activeDraft, activeDraftBody, context, explicitVerdict, privateConsent, selectedPr, verdict],
+  );
 
   useEffect(() => {
     getAppStatus()
@@ -259,6 +274,7 @@ export default function App() {
 
   async function selectPullRequest(item: PullRequestQueueItem) {
     setSelectedPr(item);
+    dispatchWorkspace({ type: "select_pr", pr: item });
     setContextState("loading");
     setContextError(null);
     setPreflight(null);
@@ -275,6 +291,21 @@ export default function App() {
     setSelectedFile(nextContext.files[0] ?? null);
     setViewedFiles(new Set());
     setContextState("ready");
+
+    const workspaceInput = { owner: item.owner, repo: item.repo, number: item.number };
+    const [runsResult, draftResult] = await Promise.allSettled([
+      listAnalysisRuns(workspaceInput),
+      readReviewDraft({ ...workspaceInput, draft_id: "active" }),
+    ]);
+    dispatchWorkspace({
+      type: "load_runs_success",
+      runs: runsResult.status === "fulfilled" && Array.isArray(runsResult.value) ? runsResult.value : [],
+    });
+    const fallbackDraft = createManualReviewDraft(item, nextContext, draft);
+    const nextDraft = draftResult.status === "fulfilled" && draftResult.value ? draftResult.value : fallbackDraft;
+    dispatchWorkspace({ type: "load_draft_success", draft: nextDraft });
+    setDraft(nextDraft.body);
+    setVerdict(nextDraft.verdict);
   }
 
   function setUiLocale(uiLocale: Locale) {
@@ -382,7 +413,7 @@ export default function App() {
     if (shouldPollGithubOAuth(result)) void pollGithubUntilComplete(result.flow_id, result.interval);
   }
 
-  async function runAgent() {
+  async function runAgent(mode: AnalysisRunMode = "fast") {
     const disabled = commandDisabledReason(status, "generate_review_draft");
     if (disabled && disabled !== "generation_adapter_unavailable") {
       setAgentStatus("blocked");
@@ -397,7 +428,7 @@ export default function App() {
       return;
     }
     setAgentStatus("running");
-    setAgentMessage(`Running ${model} with ${reasoningDepth} reasoning in ${languagePreferences.review_locale}`);
+    setAgentMessage(`Running ${mode} analysis with ${model} and ${reasoningDepth} reasoning in ${languagePreferences.review_locale}`);
     setActiveRailPanel("ai");
     const result = await startAgentRun({
       owner: selectedPr.owner,
@@ -421,11 +452,18 @@ export default function App() {
     }));
     setAgentStatus(result.status);
     setAgentMessage(result.blocked_reason ?? result.disabled_reason ?? result.report_path ?? "Draft ready");
+    const completedRun = analysisRunFromAgentResult(result.run, selectedPr, context, mode, model, reasoningDepth, languagePreferences.review_locale, privateConsent, result.body);
+    const generatedDraft = result.body.trim() ? reviewDraftFromRun(completedRun, result.body, activeDraft?.verdict ?? verdict) : null;
+    dispatchWorkspace({ type: "run_completed", run: completedRun, draft: generatedDraft });
     if (result.body.trim()) {
-      setDraft(result.body);
-      setDraftDirtySincePreflight(true);
-      setPreflight(null);
-      setActiveRailPanel("draft");
+      if (!activeDraft?.user_edited) {
+        setDraft(result.body);
+        setDraftDirtySincePreflight(true);
+        setPreflight(null);
+        setActiveRailPanel("draft");
+      } else {
+        setActiveRailPanel("ai");
+      }
     }
   }
 
@@ -444,6 +482,7 @@ export default function App() {
       current_diff_hash: context.diff_hash,
     });
     setPreflight(next);
+    dispatchWorkspace({ type: "prepare_publish_success", preflight: next });
     setDraftDirtySincePreflight(false);
   }
 
@@ -470,6 +509,7 @@ export default function App() {
 
   function updateDraft(next: string) {
     setDraft(next);
+    dispatchWorkspace({ type: "edit_draft_body", body: next });
     setDraftDirtySincePreflight(true);
     setPreflight(null);
     setSubmitMessage(null);
@@ -486,9 +526,9 @@ export default function App() {
       number: target.number,
       expected_head_sha: currentContext.pr.head_sha,
       expected_diff_hash: currentContext.diff_hash,
-      body: draft,
-      event: verdict,
-      inline_comments: [],
+      body: activeDraftBody,
+      event: activeDraft?.verdict ?? verdict,
+      inline_comments: activeDraft?.inline_comments ?? [],
       explicit_verdict_confirmed: explicitVerdict,
       private_diff_consent_required: agentStatus !== "blocked",
       private_diff_consent_accepted: privateConsent,
@@ -497,11 +537,41 @@ export default function App() {
 
   function updateVerdict(next: Verdict) {
     setVerdict(next);
+    if (activeDraft) {
+      dispatchWorkspace({ type: "replace_draft_from_run", draft: { ...activeDraft, verdict: next, user_edited: true, updated_at: new Date().toISOString() } });
+    }
     setExplicitVerdict(next === "COMMENT");
     setDraftDirtySincePreflight(true);
     setPreflight(null);
     setSubmitMessage(null);
     setSubmittedReviewId(null);
+  }
+
+  function replaceDraftFromRun(run: AnalysisRunView) {
+    const body = run.draft_seed_body ?? "";
+    const nextDraft = reviewDraftFromRun(run, body, activeDraft?.verdict ?? verdict);
+    dispatchWorkspace({ type: "replace_draft_from_run", draft: nextDraft });
+    setDraft(nextDraft.body);
+    setVerdict(nextDraft.verdict);
+    setDraftDirtySincePreflight(true);
+    setPreflight(null);
+    setSubmitMessage(null);
+  }
+
+  function updateInlineSelection(id: string, selected: boolean) {
+    if (!activeDraft) return;
+    const comments = setInlineCommentSelection(activeDraft.inline_comments, id, selected);
+    dispatchWorkspace({ type: "validate_inline_success", comments });
+    setDraftDirtySincePreflight(true);
+    setPreflight(null);
+  }
+
+  function dismissInline(id: string) {
+    if (!activeDraft) return;
+    const comments = dismissInlineCommentById(activeDraft.inline_comments, id);
+    dispatchWorkspace({ type: "validate_inline_success", comments });
+    setDraftDirtySincePreflight(true);
+    setPreflight(null);
   }
 
   if (shouldShowStartupGate(status)) {
@@ -526,122 +596,226 @@ export default function App() {
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="flex h-screen flex-col overflow-hidden">
-        <TopBar
-          locale={locale}
-          status={status}
-          model={model}
-          languagePreferences={languagePreferences}
-          commandInputRef={commandInputRef}
-          commandQuery={commandQuery}
-          onCommandQueryChange={setCommandQuery}
-        />
-
-        <div className="flex min-h-0 flex-1 overflow-hidden">
-          <nav className="w-44 shrink-0 border-r border-zinc-800 bg-zinc-950 p-3">
-            <div className="mb-4 px-2 text-sm font-semibold">{t(locale, "app.name")}</div>
-            {appScreens.map((screen) => (
-              <button
-                key={screen}
-                onClick={() => setActiveScreen(screen)}
-                className={`mb-1 flex h-9 w-full items-center rounded-md px-2 text-left text-sm transition ${
-                  activeScreen === screen ? "bg-zinc-100 text-zinc-950" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100"
-                }`}
-              >
-                {screen === "inbox" ? t(locale, "nav.inbox") : t(locale, "nav.settings")}
-              </button>
-            ))}
-          </nav>
-
-          {activeScreen === "settings" ? (
-            <section className="min-w-0 flex-1 overflow-hidden">
-              <SettingsScreen
-                locale={locale}
-                status={status}
-                codexBridgeStatus={codexBridgeStatus}
-                languagePreferences={languagePreferences}
-                onSetUiLocale={setUiLocale}
-                onSetReviewLocale={setReviewLocale}
-              />
-            </section>
-          ) : (
-            <section className="grid min-w-0 flex-1 grid-cols-[320px_minmax(0,1fr)_360px] overflow-hidden max-[1023px]:grid-cols-[280px_minmax(0,1fr)]">
-              <ReviewInboxRail
-                locale={locale}
-                repositories={repositories}
-                selectedRepo={selectedRepo}
-                filter={filter}
-                queueState={queueState}
-                queueError={queueError}
-                sections={inboxSections}
-                selectedPr={selectedPr}
-                onSelectRepo={setSelectedRepo}
-                onSetFilter={setFilter}
-                onRefresh={() => refreshQueue(false)}
-                onSelectPr={selectPullRequest}
-              />
-              <PrWorkspace
-                locale={locale}
-                selectedPr={selectedPr}
-                context={context}
-                contextState={contextState}
-                contextError={contextError}
-                selectedFile={selectedFile}
-                viewedFiles={viewedFiles}
-                onSelectFile={setSelectedFile}
-                onMarkViewed={(path) => setViewedFiles((current) => new Set(current).add(path))}
-                onRetryContext={() => selectedPr && selectPullRequest(selectedPr)}
-              />
-              <ReviewRail
-                locale={locale}
-                status={status}
-                selectedRef={selectedRef}
-                selectedPr={selectedPr}
-                context={context}
-                activeRailPanel={activeRailPanel}
-                onSetActiveRailPanel={setActiveRailPanel}
-                agentStatus={agentStatus}
-                agentMessage={agentMessage}
-                model={model}
-                reasoningDepth={reasoningDepth}
-                aiModels={status.ai_models ?? []}
-                aiRateLimit={status.ai_rate_limit}
-                aiConnection={status.ai_connection}
-                reviewLocale={languagePreferences.review_locale}
-                privateConsent={privateConsent}
-                onSetModel={setModel}
-                onSetReasoningDepth={setReasoningDepth}
-                onSetPrivateConsent={(accepted) => {
-                  setPrivateConsent(accepted);
-                  setDraftDirtySincePreflight(true);
-                  setPreflight(null);
-                }}
-                onRun={runAgent}
-                verdict={verdict}
-                draft={draft}
-                explicitVerdict={explicitVerdict}
-                onSetVerdict={updateVerdict}
-                onSetExplicitVerdict={(confirmed) => {
-                  setExplicitVerdict(confirmed);
-                  setDraftDirtySincePreflight(true);
-                  setPreflight(null);
-                }}
-                onSetDraft={updateDraft}
-                safetyState={safetyState}
-                preflight={preflight}
-                submitMessage={submitMessage}
-                onPrepare={prepareSubmit}
-                onConfirm={confirmSubmit}
-              />
-            </section>
-          )}
-        </div>
-      </div>
+      <AppShell
+        topBar={
+          <TopBar
+            locale={locale}
+            status={status}
+            model={model}
+            languagePreferences={languagePreferences}
+            commandInputRef={commandInputRef}
+            commandQuery={commandQuery}
+            onCommandQueryChange={setCommandQuery}
+          />
+        }
+        activeScreen={activeScreen === "settings" ? "settings" : "inbox"}
+        navItems={appScreens.map((screen) => ({
+          id: screen,
+          label: screen === "inbox" ? t(locale, "nav.inbox") : t(locale, "nav.settings"),
+        }))}
+        onSetActiveScreen={setActiveScreen}
+        settingsContent={
+          <SettingsScreen
+            locale={locale}
+            status={status}
+            codexBridgeStatus={codexBridgeStatus}
+            languagePreferences={languagePreferences}
+            onSetUiLocale={setUiLocale}
+            onSetReviewLocale={setReviewLocale}
+          />
+        }
+        locale={locale}
+        queueProps={{
+          repositories,
+          selectedRepo,
+          filter,
+          queueState,
+          queueError,
+          sections: inboxSections,
+          selectedPr,
+          onSelectRepo: setSelectedRepo,
+          onSetFilter: setFilter,
+          onRefresh: () => refreshQueue(false),
+          onSelectPr: selectPullRequest,
+        }}
+        workspaceProps={{
+          selectedPr,
+          context,
+          contextState,
+          contextError,
+          selectedFile,
+          viewedFiles,
+          onSelectFile: setSelectedFile,
+          onMarkViewed: (path) => setViewedFiles((current) => new Set(current).add(path)),
+          onRetryContext: () => selectedPr && selectPullRequest(selectedPr),
+        }}
+        draftPublishProps={{
+          selectedRef,
+          draft: activeDraft,
+          runs: workspace.runs,
+          explicitVerdict,
+          safetyState,
+          preflight,
+          submitMessage,
+          publishPayload,
+          submitting,
+          runDisabled: !selectedPr || !context,
+          onRunMode: runAgent,
+          onRunCustom: () => runAgent("custom"),
+          onReplaceDraftFromRun: replaceDraftFromRun,
+          onSetVerdict: updateVerdict,
+          onSetExplicitVerdict: (confirmed) => {
+            setExplicitVerdict(confirmed);
+            setDraftDirtySincePreflight(true);
+            setPreflight(null);
+          },
+          onSetDraftBody: updateDraft,
+          onToggleInlineSelected: updateInlineSelection,
+          onDismissInline: dismissInline,
+          onPrepare: prepareSubmit,
+          onConfirm: confirmSubmit,
+        }}
+      />
       <div className="sr-only">
         <Search />
       </div>
     </main>
   );
+}
+
+function createManualReviewDraft(
+  item: PullRequestQueueItem,
+  context: PullRequestContextView,
+  body: string,
+): ReviewDraftView {
+  const now = new Date().toISOString();
+  return {
+    draft_id: `manual-${item.owner}-${item.repo}-${item.number}`,
+    owner: item.owner,
+    repo: item.repo,
+    number: item.number,
+    source_run_ids: [],
+    base_head_sha: context.pr.head_sha,
+    base_diff_hash: context.diff_hash,
+    verdict: "COMMENT",
+    body,
+    inline_comments: [],
+    user_edited: body.trim().length > 0,
+    stale: false,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function analysisRunFromAgentResult(
+  record: AgentRunRecordView | null,
+  item: PullRequestQueueItem,
+  context: PullRequestContextView,
+  mode: AnalysisRunMode,
+  model: string,
+  reasoningEffort: ReasoningEffort,
+  reviewLanguage: Locale,
+  privateConsent: boolean,
+  draftSeedBody: string,
+): AnalysisRunView {
+  const now = new Date().toISOString();
+  if (record) {
+    return {
+      run_id: record.run_id,
+      owner: item.owner,
+      repo: item.repo,
+      number: item.number,
+      head_sha: record.head_sha,
+      diff_hash: record.diff_hash,
+      context_hash: context.context_hash,
+      mode,
+      model_id: record.model_id,
+      reasoning_effort: record.reasoning_effort,
+      review_language: record.review_language,
+      custom_prompt: null,
+      prompt_version: record.prompt_version,
+      selected_files: record.selected_files,
+      excluded_files: [],
+      private_diff_consent_snapshot: record.private_diff_consent_snapshot,
+      status: record.status === "blocked" ? "failed" : record.status,
+      blocked_reason: record.blocked_reason ?? null,
+      draft_seed_body: draftSeedBody.trim() ? draftSeedBody : null,
+      findings: [],
+      created_at: record.started_at,
+      completed_at: record.completed_at ?? now,
+    };
+  }
+
+  return {
+    run_id: `legacy-${item.owner}-${item.repo}-${item.number}-${Date.now()}`,
+    owner: item.owner,
+    repo: item.repo,
+    number: item.number,
+    head_sha: context.pr.head_sha,
+    diff_hash: context.diff_hash,
+    context_hash: context.context_hash,
+    mode,
+    model_id: model,
+    reasoning_effort: reasoningEffort,
+    review_language: reviewLanguage,
+    custom_prompt: null,
+    prompt_version: "legacy-start-agent-run",
+    selected_files: context.files.filter((file) => file.ai_included).map((file) => file.path),
+    excluded_files: context.files.filter((file) => !file.ai_included).map((file) => file.path),
+    private_diff_consent_snapshot: privateConsent,
+    status: draftSeedBody.trim() ? "draft_ready" : "failed",
+    blocked_reason: null,
+    draft_seed_body: draftSeedBody.trim() ? draftSeedBody : null,
+    findings: [],
+    created_at: now,
+    completed_at: now,
+  };
+}
+
+function reviewDraftFromRun(
+  run: AnalysisRunView,
+  body: string,
+  verdict: Verdict,
+): ReviewDraftView {
+  const now = new Date().toISOString();
+  return {
+    draft_id: `draft-${run.run_id}`,
+    owner: run.owner,
+    repo: run.repo,
+    number: run.number,
+    source_run_ids: [run.run_id],
+    base_head_sha: run.head_sha,
+    base_diff_hash: run.diff_hash,
+    verdict,
+    body,
+    inline_comments: findingsToInlineComments(run),
+    user_edited: false,
+    stale: false,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function findingsToInlineComments(run: AnalysisRunView): InlineCommentDraftView[] {
+  return run.findings
+    .filter((finding) => finding.path && finding.line && finding.body)
+    .map((finding, index) => ({
+      id: finding.id ?? `${run.run_id}-finding-${index}`,
+      path: finding.path ?? "",
+      side: "RIGHT",
+      line: finding.line ?? 0,
+      start_line: null,
+      start_side: null,
+      body: finding.body ?? "",
+      severity: finding.severity ?? null,
+      confidence: finding.confidence ?? null,
+      source_run_id: run.run_id,
+      source_finding_id: finding.id ?? null,
+      selected_for_publish: true,
+      dismissed: false,
+      user_edited: false,
+      mapping_status: "valid",
+    }));
 }
 
 function TopBar({
