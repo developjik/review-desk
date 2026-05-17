@@ -1,5 +1,7 @@
 use crate::domain::{AnalysisRun, Result, ReviewDeskError, ReviewDraft};
 use crate::storage::LocalStore;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,13 +46,15 @@ impl WorkspaceStore {
         validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
         self.ensure_workspace_dirs(key)?;
         let relative = format!("{}/runs/{}.json", key.base_relative(), run.run_id);
-        if self.local.root().join(&relative).exists() {
-            return Err(ReviewDeskError::InvalidPath(format!(
-                "run already exists: {}",
-                run.run_id
-            )));
-        }
-        self.local.save_json(&relative, run)
+        let path = self.local.root().join(&relative);
+        let data = serde_json::to_vec_pretty(run)?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&data)?;
+        set_owner_only_file(&path)?;
+        Ok(path)
     }
 
     pub fn list_runs(&self, key: &PrWorkspaceKey) -> Result<Vec<AnalysisRun>> {
@@ -69,7 +73,7 @@ impl WorkspaceStore {
         }
         paths.sort();
 
-        paths
+        let mut runs = paths
             .into_iter()
             .map(|path| {
                 let file_name = path
@@ -82,7 +86,13 @@ impl WorkspaceStore {
                 validate_pr_identity(key, &run.owner, &run.repo, run.number)?;
                 Ok(run)
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        runs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.run_id.cmp(&right.run_id))
+        });
+        Ok(runs)
     }
 
     pub fn save_draft(&self, key: &PrWorkspaceKey, draft: &ReviewDraft) -> Result<PathBuf> {
@@ -106,6 +116,7 @@ impl WorkspaceStore {
 
     pub fn mark_active_draft(&self, key: &PrWorkspaceKey, draft_id: &str) -> Result<PathBuf> {
         validate_segment("draft_id", draft_id)?;
+        self.read_draft(key, draft_id)?;
         self.ensure_workspace_dirs(key)?;
         let draft_id = draft_id.to_string();
         self.local.save_json(
@@ -170,9 +181,9 @@ fn validate_segment(label: &str, value: &str) -> Result<()> {
     if value.is_empty()
         || value == ".."
         || value.starts_with('.')
-        || value.contains("..")
-        || value.contains('/')
-        || value.contains('\\')
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(ReviewDeskError::InvalidPath(format!(
             "invalid {label} segment: {value}"
@@ -190,5 +201,17 @@ fn set_owner_only_dir(path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn set_owner_only_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_owner_only_file(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_owner_only_file(_path: &Path) -> Result<()> {
     Ok(())
 }

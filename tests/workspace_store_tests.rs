@@ -3,7 +3,7 @@ use reviewdesk::domain::{
     AnalysisRun, AnalysisRunMode, AnalysisRunStatus, ReviewDraft, ReviewEvent,
 };
 use reviewdesk::workspace_store::{PrWorkspaceKey, WorkspaceStore};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn workspace_store_groups_artifacts_by_pr_with_owner_only_permissions() {
@@ -72,7 +72,9 @@ fn workspace_store_rejects_path_traversal_in_owner_repo_and_ids() {
     let store = WorkspaceStore::init(temp.path()).expect("store");
     let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
 
-    for invalid_id in ["", "..", "../run-a", "run/a", "run\\a", ".run-a"] {
+    for invalid_id in [
+        "", "..", "../run-a", "run/a", "run\\a", ".run-a", "run a", "run:a", "run#a", "run\ta",
+    ] {
         let run = sample_run(invalid_id);
         assert!(
             store.save_run(&key, &run).is_err(),
@@ -101,6 +103,9 @@ fn workspace_store_rejects_tampered_active_draft_id_on_read() {
     let store = WorkspaceStore::init(temp.path()).expect("store");
     let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
     store
+        .save_draft(&key, &sample_draft("draft-a", "run-a"))
+        .expect("save draft");
+    store
         .mark_active_draft(&key, "draft-a")
         .expect("active draft");
 
@@ -112,6 +117,17 @@ fn workspace_store_rejects_tampered_active_draft_id_on_read() {
     .expect("tamper active draft");
 
     assert!(store.read_active_draft_id(&key).is_err());
+}
+
+#[test]
+fn workspace_store_rejects_missing_active_draft_without_creating_dangling_state() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let active_path = active_draft_path(temp.path());
+
+    assert!(store.mark_active_draft(&key, "missing-draft").is_err());
+    assert!(!active_path.exists());
 }
 
 #[test]
@@ -162,6 +178,56 @@ fn workspace_store_rejects_duplicate_run_id_without_overwriting() {
     assert_eq!(runs[0].model_id, "gpt-5.5");
 }
 
+#[cfg(unix)]
+#[test]
+fn workspace_store_rejects_existing_run_path_atomically_without_following_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    store
+        .save_run(&key, &sample_run("seed-run"))
+        .expect("seed workspace dirs");
+
+    let outside_path = temp.path().join("outside-run.json");
+    let run_path = temp
+        .path()
+        .join(".reviewdesk/workspaces/company/payment-web/582/runs/run-a.json");
+    symlink(&outside_path, &run_path).expect("symlink run path");
+
+    assert!(store.save_run(&key, &sample_run("run-a")).is_err());
+    assert!(!outside_path.exists());
+    assert!(
+        std::fs::symlink_metadata(&run_path)
+            .expect("run path metadata")
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn workspace_store_lists_runs_by_created_at() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let store = WorkspaceStore::init(temp.path()).expect("store");
+    let key = PrWorkspaceKey::new("company", "payment-web", 582).expect("key");
+    let mut newer = sample_run("run-a");
+    newer.created_at = "2026-05-17T00:00:02Z".to_string();
+    let mut older = sample_run("run-z");
+    older.created_at = "2026-05-17T00:00:01Z".to_string();
+
+    store.save_run(&key, &newer).expect("save newer run");
+    store.save_run(&key, &older).expect("save older run");
+
+    let runs = store.list_runs(&key).expect("runs");
+    assert_eq!(
+        runs.iter()
+            .map(|run| run.run_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["run-z", "run-a"]
+    );
+}
+
 #[test]
 fn workspace_store_rejects_tampered_loaded_runs_that_do_not_match_workspace_key() {
     for (field, value) in [
@@ -202,6 +268,12 @@ fn workspace_store_rejects_tampered_loaded_drafts_that_do_not_match_workspace_ke
             "tampered draft {field} should be rejected"
         );
     }
+}
+
+fn active_draft_path(temp_path: impl AsRef<Path>) -> PathBuf {
+    temp_path
+        .as_ref()
+        .join(".reviewdesk/workspaces/company/payment-web/582/drafts/active.json")
 }
 
 fn sample_run(run_id: &str) -> AnalysisRun {
