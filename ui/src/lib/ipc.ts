@@ -89,40 +89,93 @@ export function collectPrContext(item: PullRequestQueueItem): Promise<PullReques
 }
 
 export interface SubmitPreflightInput {
+  payload: ReviewPublishPayload;
   github_connected: boolean;
   write_scope_valid: boolean;
   sso_required: boolean;
   pr_open: boolean;
   pr_merged: boolean;
-  expected_head_sha: string;
   current_head_sha: string;
-  draft_body: string;
-  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
-  explicit_verdict_confirmed: boolean;
-  private_diff_consent_required: boolean;
-  private_diff_consent_accepted: boolean;
+  current_diff_hash: string;
 }
 
 export interface SubmitPreflightView {
   status: "ready" | "blocked";
   blocked_reasons: string[];
   confirmation_id: string | null;
+  payload?: ReviewPublishPayload;
 }
 
 export interface ConfirmSubmitReviewInput {
+  payload: ReviewPublishPayload;
+  confirmation_id: string;
+}
+
+export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+export type InlineMappingStatus = "valid" | "missing_path" | "invalid_side" | "invalid_line" | "stale_diff";
+
+export interface InlineCommentDraft {
+  id: string;
+  path: string;
+  side: string;
+  line: number;
+  start_line: number | null;
+  start_side: string | null;
+  body: string;
+  severity: string | null;
+  confidence: number | null;
+  source_run_id: string | null;
+  source_finding_id: string | null;
+  selected_for_publish: boolean;
+  dismissed: boolean;
+  user_edited: boolean;
+  mapping_status: InlineMappingStatus;
+}
+
+export interface ReviewPublishPayload {
   owner: string;
   repo: string;
   number: number;
   expected_head_sha: string;
+  expected_diff_hash: string;
   body: string;
-  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+  event: ReviewEvent;
+  inline_comments: InlineCommentDraft[];
   explicit_verdict_confirmed: boolean;
-  confirmation_id: string;
+  private_diff_consent_required: boolean;
+  private_diff_consent_accepted: boolean;
 }
 
 export interface SubmittedReviewView {
   id: number;
   url: string;
+}
+
+export function buildReviewPublishPayload(input: ReviewPublishPayload): ReviewPublishPayload {
+  return {
+    ...input,
+    inline_comments: input.inline_comments,
+  };
+}
+
+export function buildPrepareSubmitReviewRequest(input: SubmitPreflightInput): SubmitPreflightInput {
+  return {
+    ...input,
+    payload: buildReviewPublishPayload(input.payload),
+  };
+}
+
+export function buildConfirmSubmitReviewRequest(input: ConfirmSubmitReviewInput): ConfirmSubmitReviewInput {
+  return {
+    ...input,
+    payload: buildReviewPublishPayload(input.payload),
+  };
+}
+
+function publishableInlineComments(payload: ReviewPublishPayload): InlineCommentDraft[] {
+  return payload.inline_comments.filter(
+    (comment) => comment.selected_for_publish && !comment.dismissed && comment.mapping_status === "valid" && Boolean(comment.body.trim()),
+  );
 }
 
 export function prepareSubmitReview(input: SubmitPreflightInput): Promise<SubmitPreflightView> {
@@ -132,24 +185,35 @@ export function prepareSubmitReview(input: SubmitPreflightInput): Promise<Submit
   if (input.sso_required) blockedReasons.push("github_sso_required");
   if (!input.pr_open) blockedReasons.push("pr_closed");
   if (input.pr_merged) blockedReasons.push("pr_merged");
-  if (input.expected_head_sha !== input.current_head_sha) blockedReasons.push("head_changed");
-  if (!input.draft_body.trim()) blockedReasons.push("body_empty");
-  if (input.event !== "COMMENT" && !input.explicit_verdict_confirmed) {
+  if (input.payload.expected_head_sha !== input.current_head_sha) blockedReasons.push("head_changed");
+  if (input.payload.expected_diff_hash !== input.current_diff_hash) blockedReasons.push("diff_changed");
+  if (
+    input.payload.inline_comments.some(
+      (comment) => comment.selected_for_publish && !comment.dismissed && Boolean(comment.body.trim()) && comment.mapping_status !== "valid",
+    )
+  ) {
+    blockedReasons.push("inline_mapping_invalid");
+  }
+  if (!input.payload.body.trim() && publishableInlineComments(input.payload).length === 0) {
+    blockedReasons.push("payload_empty");
+  }
+  if (input.payload.event !== "COMMENT" && !input.payload.explicit_verdict_confirmed) {
     blockedReasons.push("explicit_verdict_confirmation_required");
   }
-  if (input.private_diff_consent_required && !input.private_diff_consent_accepted) {
+  if (input.payload.private_diff_consent_required && !input.payload.private_diff_consent_accepted) {
     blockedReasons.push("private_diff_consent_required");
   }
 
-  return safeInvoke("prepare_submit_review", { request: input }, {
+  return safeInvoke("prepare_submit_review", { request: buildPrepareSubmitReviewRequest(input) }, {
     status: blockedReasons.length === 0 ? "ready" : "blocked",
     blocked_reasons: blockedReasons,
     confirmation_id: blockedReasons.length === 0 ? "sample-confirmation" : null,
+    payload: input.payload,
   });
 }
 
 export function confirmSubmitReview(input: ConfirmSubmitReviewInput): Promise<SubmittedReviewView> {
-  return safeInvokeNoFallback("confirm_submit_review", { request: input });
+  return safeInvokeNoFallback("confirm_submit_review", { request: buildConfirmSubmitReviewRequest(input) });
 }
 
 export interface OAuthStartView {

@@ -34,6 +34,7 @@ import {
   startAgentRun,
   startCodexChatGptLogin,
   startGithubOAuth,
+  type ReviewPublishPayload,
   type SubmitPreflightView,
 } from "./lib/ipc";
 import { t } from "./lib/i18n";
@@ -429,21 +430,18 @@ export default function App() {
   }
 
   async function prepareSubmit() {
-    if (!context) return;
+    if (!selectedPr || !context) return;
     setSubmitMessage(null);
+    const payload = currentReviewPublishPayload(selectedPr, context);
     const next = await prepareSubmitReview({
+      payload,
       github_connected: status.github === "connected",
       write_scope_valid: true,
       sso_required: false,
       pr_open: context.pr.state === "open",
       pr_merged: context.pr.merged,
-      expected_head_sha: context.pr.head_sha,
       current_head_sha: context.pr.head_sha,
-      draft_body: draft,
-      event: verdict,
-      explicit_verdict_confirmed: explicitVerdict,
-      private_diff_consent_required: agentStatus !== "blocked",
-      private_diff_consent_accepted: privateConsent,
+      current_diff_hash: context.diff_hash,
     });
     setPreflight(next);
     setDraftDirtySincePreflight(false);
@@ -454,14 +452,9 @@ export default function App() {
     setSubmitting(true);
     setSubmitMessage("Submitting review...");
     try {
+      const payload = currentReviewPublishPayload(selectedPr, context);
       const submitted = await confirmSubmitReview({
-        owner: selectedPr.owner,
-        repo: selectedPr.repo,
-        number: selectedPr.number,
-        expected_head_sha: context.pr.head_sha,
-        body: draft,
-        event: verdict,
-        explicit_verdict_confirmed: explicitVerdict,
+        payload,
         confirmation_id: preflight.confirmation_id,
       });
       setSubmittedReviewId(submitted.id);
@@ -481,6 +474,25 @@ export default function App() {
     setPreflight(null);
     setSubmitMessage(null);
     setSubmittedReviewId(null);
+  }
+
+  function currentReviewPublishPayload(
+    target: PullRequestQueueItem,
+    currentContext: PullRequestContextView,
+  ): ReviewPublishPayload {
+    return {
+      owner: target.owner,
+      repo: target.repo,
+      number: target.number,
+      expected_head_sha: currentContext.pr.head_sha,
+      expected_diff_hash: currentContext.diff_hash,
+      body: draft,
+      event: verdict,
+      inline_comments: [],
+      explicit_verdict_confirmed: explicitVerdict,
+      private_diff_consent_required: agentStatus !== "blocked",
+      private_diff_consent_accepted: privateConsent,
+    };
   }
 
   function updateVerdict(next: Verdict) {

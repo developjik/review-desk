@@ -53,12 +53,11 @@ pub fn prepare_review_publish(
     if payload
         .inline_comments
         .iter()
-        .any(is_selected_not_dismissed_invalid_mapping)
+        .any(invalid_publish_inline_mapping)
     {
         blocked_reasons.push("inline_mapping_invalid".to_string());
     }
-    if payload.body.trim().is_empty() && !payload.inline_comments.iter().any(is_publishable_inline)
-    {
+    if payload.body.trim().is_empty() && publishable_inline_comments(&payload).next().is_none() {
         blocked_reasons.push("payload_empty".to_string());
     }
     if payload.event != ReviewEvent::Comment && !payload.explicit_verdict_confirmed {
@@ -85,17 +84,26 @@ pub fn prepare_review_publish(
     }
 }
 
+pub fn publishable_inline_comments(
+    payload: &ReviewPublishPayload,
+) -> impl Iterator<Item = &InlineCommentDraft> {
+    payload
+        .inline_comments
+        .iter()
+        .filter(|comment| is_publishable_inline_comment(comment))
+}
+
 fn is_selected_not_dismissed(comment: &InlineCommentDraft) -> bool {
     comment.selected_for_publish && !comment.dismissed
 }
 
-fn is_selected_not_dismissed_invalid_mapping(comment: &InlineCommentDraft) -> bool {
+fn invalid_publish_inline_mapping(comment: &InlineCommentDraft) -> bool {
     is_selected_not_dismissed(comment)
         && !comment.body.trim().is_empty()
         && comment.mapping_status != InlineMappingStatus::Valid
 }
 
-fn is_publishable_inline(comment: &InlineCommentDraft) -> bool {
+pub fn is_publishable_inline_comment(comment: &InlineCommentDraft) -> bool {
     is_selected_not_dismissed(comment)
         && comment.mapping_status == InlineMappingStatus::Valid
         && !comment.body.trim().is_empty()
@@ -110,10 +118,7 @@ fn confirmation_id(payload: &ReviewPublishPayload) -> String {
         expected_diff_hash: &payload.expected_diff_hash,
         event: payload.event,
         body: &payload.body,
-        inline_comments: payload
-            .inline_comments
-            .iter()
-            .filter(|comment| is_publishable_inline(comment))
+        inline_comments: publishable_inline_comments(payload)
             .map(|comment| ConfirmationInlineComment {
                 path: &comment.path,
                 side: &comment.side,

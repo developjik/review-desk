@@ -7,9 +7,8 @@ use reviewdesk::app_core::{
 use reviewdesk::auth::{KeyringTokenStore, TokenKind, TokenStore};
 use reviewdesk::codex_bridge::{CodexBridge, CodexBridgeStatusView, sanitize_codex_diagnostics};
 use reviewdesk::domain::{
-    ChangedFile, GitHubErrorKind, InlineCommentDraft, InlineMappingStatus, PublishAttempt,
-    PullRequestQueueItem, Repository, ReviewDeskError, ReviewDraft, ReviewEvent,
-    ReviewPublishPayload,
+    ChangedFile, GitHubErrorKind, InlineCommentDraft, PublishAttempt, PullRequestQueueItem,
+    Repository, ReviewDeskError, ReviewDraft, ReviewEvent, ReviewPublishPayload,
 };
 use reviewdesk::github::{
     DevicePoll, GitHubClient, PullRequestContextView, ReviewSubmitComment, ReviewSubmitRequest,
@@ -18,6 +17,7 @@ use reviewdesk::github::{
 use reviewdesk::inline_comments::validate_inline_comments as validate_inline_comments_core;
 use reviewdesk::publish::{
     PreparedReviewPublishStatus, PreparedReviewPublishView, prepare_review_publish,
+    publishable_inline_comments,
 };
 use reviewdesk::review::{ReviewPipeline, build_review_input, stable_changed_files_hash};
 use reviewdesk::security::PrivateDiffConsent;
@@ -1679,16 +1679,7 @@ pub async fn confirm_submit_review(
         return Err(error);
     }
 
-    let comments = request
-        .payload
-        .inline_comments
-        .iter()
-        .filter(|comment| {
-            comment.selected_for_publish
-                && !comment.dismissed
-                && comment.mapping_status == InlineMappingStatus::Valid
-                && !comment.body.trim().is_empty()
-        })
+    let comments = publishable_inline_comments(&request.payload)
         .map(|comment| ReviewSubmitComment {
             path: comment.path.clone(),
             side: comment.side.clone(),
