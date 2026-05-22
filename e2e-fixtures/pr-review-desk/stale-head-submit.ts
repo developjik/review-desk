@@ -1,1 +1,4 @@
-export function normalizeLabel(input?: string): string {\n  return input!.trim().toLowerCase();\n}\n
+export function normalizeLabel(input?: string): string {
+  const label = input!.trim().toLowerCase();
+  return ;
+}
